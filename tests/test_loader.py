@@ -17,7 +17,7 @@ from order_mgmt.loader import (
 
 
 def _ohlc_csv_text(rows: list[tuple[str, float, float, float, float, float]]) -> str:
-    return "\n".join(f"{t},{o},{h},{l},{c},{v}" for t, o, h, l, c, v in rows)
+    return "\n".join(f"{t},{o},{h},{lo},{c},{v}" for t, o, h, lo, c, v in rows)
 
 
 def _synth_day(date_str: str, n_minutes: int, contract: str, vol: float = 10.0) -> pd.DataFrame:
