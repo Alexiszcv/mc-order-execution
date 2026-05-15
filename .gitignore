@@ -1,0 +1,46 @@
+# --- Project-specific ---
+# Raw data is large and not ours to redistribute; keep it local.
+Order Management/data/**/*.csv
+# Assignment handout is Columbia/Hirsa IP — keep local, don't republish.
+Order Management/*.pdf
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- Virtualenvs ---
+.venv/
+venv/
+env/
+.python-version
+
+# --- Tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_meta
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Local Claude state ---
+.claude/settings.local.json

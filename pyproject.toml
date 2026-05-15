@@ -1,0 +1,42 @@
+[project]
+name = "order-management"
+version = "0.1.0"
+description = "Volatility-Volume-based Order Management (Columbia IEOR4703 Term Project 2, Hirsa)."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]  # line-length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["N802"]  # allow non-snake_case for test names where useful
