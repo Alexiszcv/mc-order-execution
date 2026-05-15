@@ -20,6 +20,8 @@ Columbia IEOR4703 (Hirsa) Term Project 2: slice parent orders into child orders 
 - `notebooks/` (TBD) — exploratory analysis, plots, one notebook per market or per question
 - `tests/` (TBD) — pytest unit tests for math primitives (range formulas, EWMA recursion, no-lookahead invariants)
 - `reports/` (TBD) — final write-up + figures
+- `README.md` (TBD) — **final-submission deliverable**, ships with the Jupyter notebooks. Write near the end; grows with the project.
+- UI (TBD, **final-submission deliverable**) — `ipywidgets` cells embedded in the final notebook is the lightest path; `app.py` with Streamlit is fine if a standalone is preferred
 
 ## Commands
 
@@ -107,6 +109,15 @@ A task is done when:
 - [ ] The code runs end-to-end on **at least two different markets** (proves the generic-module requirement)
 - [ ] Any new ePDF / regime / strategy is reproduced with a fixed seed and the figure is saved to `reports/figures/`
 - [ ] Backtest results (when applicable) report slippage and fill-rate vs. a naïve TWAP/VWAP baseline
+
+## Final submission
+
+Two artifacts beyond the modules/notebooks, both due with the final submission:
+
+- **`README.md`** — bundled with the Jupyter notebooks. Should describe what the project does, how to install (`pip install -e ".[dev]"`), how to run the notebooks, where the UI lives, and a results summary. Write this near the end — it evolves with the project, not the scaffold.
+- **Parameter-tuning UI** — a simple interactive surface to vary τ, ε, half-life `m`, M/N/K regime counts, and roll thresholds, then re-run the analysis without editing code. Default choice: `ipywidgets` cells in the final notebook (no separate app needed; lives in one submission file). Streamlit/Gradio is fine if you want it standalone.
+
+These ship in the **final** vertical slice — slice 10, after the backtester works. Don't start them earlier; the parameter set isn't stable until then.
 
 ## Out of scope for Claude
 
