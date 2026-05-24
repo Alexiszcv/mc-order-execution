@@ -45,17 +45,13 @@ def _build_figure(df: pd.DataFrame, ticker: str, daily, max_traded: int):
         ax.axvspan(date, date + pd.Timedelta(days=1),
                    color="#4CAF50", alpha=0.12, linewidth=0)
 
-    # Aggregate to 15-min buckets for display (30 k → ~2 k points, same visual)
-    vol_display = df["volume"].resample("15min").sum()
-    vol_display = vol_display[vol_display > 0]
-    t_num = mdates.date2num(vol_display.index.to_pydatetime())
-    ax.vlines(t_num, 0, vol_display.to_numpy(),
-              color="steelblue", linewidth=1.2, alpha=0.8)
+    vol_daily = df["volume"].resample("D").sum()
+    vol_daily = vol_daily[vol_daily > 0]
+    t_num = mdates.date2num(vol_daily.index.to_pydatetime())
+    ax.bar(t_num, vol_daily.to_numpy(), width=0.8,
+           color="steelblue", alpha=0.8)
     ax.xaxis_date()
 
-    ax.set_title(f"{ticker} — Volume per minute\n"
-                 f"(green: traded_mins ≥ 90 % of max = {max_traded})",
-                 fontsize=11)
     ax.set_xlabel("Time")
     ax.set_ylabel("Volume")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))

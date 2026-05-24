@@ -89,6 +89,10 @@ Both are computed via the recursive Algorithm 1 from the project spec, using
 `η_{j-1}` at step j to avoid any lookahead. The half-life m (in bars) is a
 user parameter.
 
+### Δx discontinuities
+
+Since only a subset of days is retained, consecutive kept days are not necessarily contiguous in calendar time. The first bar of each kept day is therefore assigned `Δx = NaN` to avoid contaminating the direction signal with overnight or multi-day price jumps. These bars are excluded from the binning threshold computation and do not increment the conditional frequency tables.
+
 ### Parameters
 
 | Parameter | Description | Default |

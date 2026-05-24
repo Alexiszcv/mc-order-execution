@@ -1,3 +1,6 @@
+import bisect
+from collections import Counter
+
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -38,7 +41,7 @@ def compute_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
     dt_tau  = pd.Timedelta(minutes=tau)
     dt_last = pd.Timedelta(minutes=tau - 1)   # last minute inside the window
 
-    t_list, value_list, ell_list = [], [], []
+    t_list, value_list, ell_list, vol_list = [], [], [], []
 
     for day in proper_days_list:
         day_ts   = pd.Timestamp(day).normalize()
@@ -80,10 +83,11 @@ def compute_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
                 t_list.append(t)
                 value_list.append(float(value))
                 ell_list.append(int(round(value / tick)))
+                vol_list.append(float(window["volume"].sum()))
 
             t += dt_tau
 
-    return t_list, value_list, ell_list
+    return t_list, value_list, ell_list, vol_list
 
 
 def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
@@ -98,7 +102,8 @@ def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
 
     Returns
     -------
-    t_list, ell_r, ell_u, ell_d  — four parallel lists
+    t_list, ell_r, ell_u, ell_d, vol_list, dx_list  — six parallel lists
+    dx_list : open[i+1] - open[i] in ticks; NaN when windows i and i+1 are not adjacent
     """
     NS_PER_DAY  = 86_400 * 10 ** 9
     dt_tau_ns   = int(pd.Timedelta(minutes=tau).value)
@@ -108,7 +113,7 @@ def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
 
     # Pre-group: one O(n_total) pass to build per-day numpy arrays
     proper_set = {pd.Timestamp(d).normalize() for d in proper_days_list}
-    day_data   = {}                          # day_ts → (idx_ns, high, low, open)
+    day_data   = {}                          # day_ts → (idx_ns, high, low, open, vol)
     for day_ts, grp in df_1min.groupby(df_1min.index.normalize()):
         if day_ts in proper_set:
             day_data[day_ts] = (
@@ -116,15 +121,16 @@ def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
                 grp["high"].to_numpy(),
                 grp["low"].to_numpy(),
                 grp["open"].to_numpy(),
+                grp["volume"].to_numpy(),
             )
 
-    t_list, ell_r, ell_u, ell_d = [], [], [], []
+    t_list, ell_r, ell_u, ell_d, vol_list, op_first_list = [], [], [], [], [], []
 
     for day in proper_days_list:
         day_ts = pd.Timestamp(day).normalize()
         if day_ts not in day_data:
             continue
-        idx_ns, hi_arr, lo_arr, op_arr = day_data[day_ts]
+        idx_ns, hi_arr, lo_arr, op_arr, vol_arr = day_data[day_ts]
 
         t_ns   = int(idx_ns[0])
         end_ns = int(idx_ns[-1])
@@ -151,10 +157,20 @@ def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
                 ell_r.append(int(round((hi_p - lo_p)         / tick)))
                 ell_u.append(int(round(max(hi_p - op,   0.0) / tick)))
                 ell_d.append(int(round(max(op   - lo_p, 0.0) / tick)))
+                vol_list.append(float(vol_arr[lo:hi].sum()))
+                op_first_list.append(float(op))
 
             t_ns += dt_tau_ns
 
-    return t_list, ell_r, ell_u, ell_d
+    # dx[i] = x[i+1] - x[i] where x = open of window i.
+    # NaN whenever windows i and i+1 are not strictly adjacent (discontinuity).
+    n = len(t_list)
+    dx_list = [np.nan] * n
+    for i in range(n - 1):
+        if int(t_list[i + 1].value) - int(t_list[i].value) == dt_tau_ns:
+            dx_list[i] = float(round((op_first_list[i + 1] - op_first_list[i]) / tick))
+
+    return t_list, ell_r, ell_u, ell_d, vol_list, dx_list
 
 
 def _build_histogram_figure(ell_r, ell_u, ell_d, tau: int, tick: float, ticker: str):
@@ -178,12 +194,107 @@ def _build_histogram_figure(ell_r, ell_u, ell_d, tau: int, tick: float, ticker: 
         ax.set_ylabel("count")
         ax.margins(x=0.02)
 
-    fig.suptitle(
-        f"{ticker} — distributions of R / R_U / R_D  (τ = {tau} min, tick = {tick:g})",
-        fontsize=11,
-    )
     plt.tight_layout()
     return fig
+
+
+def build_epdf(t_list, ell_u_list, ell_d_list, ewma_vol, ewma_range, dx_list,
+               M: int, N: int, K: int, j_start: int):
+    """
+    Build empirical PDFs of R_U and R_D conditioned on regime state (m, n, k).
+
+    At step j, the regime is read from the *previous* window (index j-1):
+    ewma_vol[j-1], ewma_range[j-1], dx_list[j-1].  Each indicator is classified
+    into {1..S} states using quantile thresholds computed on the expanding prefix
+    ewma_vol[:j-1] (all values strictly before j-1).
+
+    State assignment uses bisect on a maintained sorted list → O(n log n) total.
+
+    Parameters
+    ----------
+    t_list       : window start timestamps (length n)
+    ell_u_list   : R_U in ticks per window (length n)
+    ell_d_list   : R_D in ticks per window (length n)
+    ewma_vol     : EWMA of volume aligned on t_list, NaN at head (length n)
+    ewma_range   : EWMA of range  aligned on t_list, NaN at head (length n)
+    dx_list      : Δx in ticks aligned on t_list, NaN at discontinuities (length n)
+    M            : number of volume states  {1..M}
+    N            : number of range  states  {1..N}
+    K            : number of Δx    states  {1..K}
+    j_start      : first index to start accumulating (must be >= 1)
+
+    Returns
+    -------
+    counts_RU  : dict {(m, n, k): Counter}   keyed by (vol_state, range_state, dx_state)
+    counts_RD  : dict {(m, n, k): Counter}
+    thresholds : dict {'vol': list, 'range': list, 'dx': list}
+                 Final quantile thresholds over the full series (for display).
+    """
+    n  = len(t_list)
+    ev = np.asarray(ewma_vol,   dtype=float)
+    er = np.asarray(ewma_range, dtype=float)
+    dx = np.asarray(dx_list,    dtype=float)
+
+    counts_RU: dict = {}
+    counts_RD: dict = {}
+
+    def _state(value: float, sorted_arr: list, n_states: int):
+        """State in {1..n_states} from the rank of value in sorted_arr."""
+        L = len(sorted_arr)
+        if L < n_states:
+            return None
+        rank = bisect.bisect_left(sorted_arr, value)
+        return min(rank * n_states // L + 1, n_states)
+
+    # Pre-populate sorted lists with the prefix strictly before j_start - 1
+    # so that at j = j_start, sorted lists hold ev[0..j_start-2].
+    pre = max(0, j_start - 1)
+    sv = sorted(float(v) for v in ev[:pre] if not np.isnan(v))
+    sr = sorted(float(v) for v in er[:pre] if not np.isnan(v))
+    sd = sorted(float(v) for v in dx[:pre] if not np.isnan(v))
+
+    for j in range(max(j_start, 1), n):
+        v_cur = ev[j - 1]
+        r_cur = er[j - 1]
+        d_cur = dx[j - 1]
+
+        if not (np.isnan(v_cur) or np.isnan(r_cur) or np.isnan(d_cur)):
+            m    = _state(float(v_cur), sv, M)
+            n_st = _state(float(r_cur), sr, N)
+            k    = _state(float(d_cur), sd, K)
+
+            if m is not None and n_st is not None and k is not None:
+                key = (m, n_st, k)
+                if key not in counts_RU:
+                    counts_RU[key] = Counter()
+                    counts_RD[key] = Counter()
+                counts_RU[key][ell_u_list[j]] += 1
+                counts_RD[key][ell_d_list[j]] += 1
+
+        # Insert current values so they're available at the next step.
+        if not np.isnan(v_cur):
+            bisect.insort(sv, float(v_cur))
+        if not np.isnan(r_cur):
+            bisect.insort(sr, float(r_cur))
+        if not np.isnan(d_cur):
+            bisect.insort(sd, float(d_cur))
+
+    # Final quantile thresholds on the full series (for display in the interface).
+    def _final_qs(arr: np.ndarray, n_states: int) -> list:
+        valid = arr[~np.isnan(arr)]
+        if len(valid) < n_states:
+            return []
+        return np.percentile(
+            valid, [100.0 * s / n_states for s in range(1, n_states)]
+        ).tolist()
+
+    thresholds = {
+        "vol":   _final_qs(ev, M),
+        "range": _final_qs(er, N),
+        "dx":    _final_qs(dx, K),
+    }
+
+    return counts_RU, counts_RD, thresholds
 
 
 def _load_1min(csv_path: str) -> pd.DataFrame:
