@@ -53,6 +53,20 @@ def _build_figure(csv_path: str):
     return fig, n_green, n_total
 
 
+def get_tick(csv_path: str) -> float:
+    df = pd.read_csv(csv_path, header=None,
+                     names=["time", "open", "high", "low", "close", "volume"])
+    prices = pd.concat([df["open"], df["high"], df["low"], df["close"]])
+    prices = prices.round(8).drop_duplicates().sort_values().values
+    diffs = prices[1:] - prices[:-1]
+    positive = diffs[diffs > 1e-9]
+    raw = float(positive.min())
+    # round to 8 significant figures to eliminate floating-point noise
+    from math import log10, floor
+    magnitude = floor(log10(raw))
+    return round(raw, -magnitude + 7)
+
+
 def plot_volume(csv_path: str) -> None:
     fig, n_green, n_total = _build_figure(csv_path)
     plt.show()

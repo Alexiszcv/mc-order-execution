@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 
 sys.path.insert(0, str(Path(__file__).parent))
-from plot_volume import _build_figure   # noqa: E402  (defined below)
+from plot_volume import _build_figure, get_tick   # noqa: E402
 
 
 def _scan_contracts():
@@ -29,15 +29,16 @@ def _scan_contracts():
 
 
 def _render_plot(csv_path: Path) -> tuple:
-    """Return (base64 PNG, n_green, n_total)."""
+    """Return (base64 PNG, n_green, n_total, tick)."""
     fig, n_green, n_total = _build_figure(str(csv_path))
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
     plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode(), n_green, n_total
+    tick = get_tick(str(csv_path))
+    return base64.b64encode(buf.getvalue()).decode(), n_green, n_total, tick
 
 
-def _html(contracts, selected_stem="", img_b64="", n_green=0, n_total=0):
+def _html(contracts, selected_stem="", img_b64="", n_green=0, n_total=0, tick=None):
     options = "\n".join(
         f'<option value="{p.stem}" {"selected" if p.stem == selected_stem else ""}>'
         f'{p.stem}  ({p.parent.name})</option>'
@@ -48,9 +49,12 @@ def _html(contracts, selected_stem="", img_b64="", n_green=0, n_total=0):
         if img_b64 else ""
     )
     stats = (
-        f'<p><strong>{n_green}</strong> day{"s" if n_green != 1 else ""} kept'
+        f'<p>'
+        f'<strong>{n_green}</strong> day{"s" if n_green != 1 else ""} kept'
         f' out of <strong>{n_total}</strong>'
-        f' ({100 * n_green / n_total:.1f} %)</p>'
+        f' ({100 * n_green / n_total:.1f} %)&emsp;|&emsp;'
+        f'Tick: <strong>{tick:g}</strong>'
+        f'</p>'
         if img_b64 else ""
     )
     return f"""<!DOCTYPE html>
@@ -104,9 +108,9 @@ class Handler(BaseHTTPRequestHandler):
             if match is None:
                 self._send("<p>Contract not found.</p>", 404)
                 return
-            img_b64, n_green, n_total = _render_plot(match)
+            img_b64, n_green, n_total, tick = _render_plot(match)
             self._send(_html(self.contracts, selected_stem=stem,
-                             img_b64=img_b64, n_green=n_green, n_total=n_total))
+                             img_b64=img_b64, n_green=n_green, n_total=n_total, tick=tick))
 
         else:
             self._send("<p>Not found.</p>", 404)
