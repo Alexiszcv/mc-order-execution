@@ -19,8 +19,44 @@ DATA = ROOT / "data"
 
 sys.path.insert(0, str(Path(__file__).parent))
 from plot_volume import _build_figure, _compute_stats  # noqa: E402
-from epdf import _load_1min, compute_all_ranges, _build_histogram_figure  # noqa: E402
+from epdf import _load_1min, compute_all_ranges, _build_histogram_figure, build_epdf  # noqa: E402
 from regime import compute_ewma_series, _build_regime_figure  # noqa: E402
+
+EPDF_J_START = 200
+
+
+def _build_epdf_summary(counts_RU, counts_RD, M: int, N: int, K: int) -> str:
+    """One-row-per-cell HTML table of regime → (n_obs, mean R_U ticks, mean R_D ticks)."""
+    rows = []
+    rows.append(
+        "<tr><th>(m,n,k)</th><th>n</th><th>mean R<sub>U</sub></th>"
+        "<th>mean R<sub>D</sub></th></tr>"
+    )
+    for m in range(1, M + 1):
+        for n_st in range(1, N + 1):
+            for k in range(1, K + 1):
+                ru = counts_RU.get((m, n_st, k))
+                rd = counts_RD.get((m, n_st, k))
+                if not ru:
+                    continue
+                n_obs = sum(ru.values())
+                mean_ru = sum(ell * c for ell, c in ru.items()) / n_obs
+                mean_rd = (
+                    sum(ell * c for ell, c in rd.items()) / sum(rd.values()) if rd else 0.0
+                )
+                rows.append(
+                    f"<tr><td>({m},{n_st},{k})</td>"
+                    f"<td style='text-align:right'>{n_obs}</td>"
+                    f"<td style='text-align:right'>{mean_ru:.2f}</td>"
+                    f"<td style='text-align:right'>{mean_rd:.2f}</td></tr>"
+                )
+    if len(rows) == 1:
+        return "<p style='color:#666'>No populated regime cells (try lowering j_start or fewer states).</p>"
+    return (
+        "<table style='border-collapse:collapse;font-size:.85rem'>"
+        + "".join(rows)
+        + "</table>"
+    )
 
 
 def _scan_contracts():
@@ -57,10 +93,19 @@ def _render(csv_path: Path, tau: int, half_life: int,
         k_states_dx=k_states_dx,
     )
 
+    counts_RU, counts_RD, _thr = build_epdf(
+        t_list, ell_u, ell_d, list(ewma_vol), list(ewma_range), dx_list,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    epdf_table = _build_epdf_summary(
+        counts_RU, counts_RD, M=n_states_vol, N=n_states_range, K=k_states_dx
+    )
+
     return dict(
         vol_b64    = _fig_to_b64(fig_vol),
         hist_b64   = _fig_to_b64(fig_hist),
         regime_b64 = _fig_to_b64(fig_regime),
+        epdf_table = epdf_table,
         n_green    = n_green,
         n_total    = n_total,
         tick       = tick,
@@ -94,7 +139,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
                 f' style="max-width:100%;margin-top:20px">') if b64 else ""
 
     stats = ""
-    vol_section = hist_section = regime_section = ""
+    vol_section = hist_section = regime_section = epdf_section = ""
     if data:
         d = data
         stats = (
@@ -129,6 +174,15 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
             f'Δx = open[t+τ] − open[t] (in ticks). '
             f'Colour bands = quantile-based states.</p>'
             + img(d["regime_b64"])
+        )
+        epdf_section = (
+            '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
+            'Conditional ePDFs (regime → R<sub>U</sub>/R<sub>D</sub> ticks)</h3>'
+            f'<p style="color:#666;font-size:.9rem">'
+            f'Per-regime cell (m=volume, n=range, k=direction): count of windows and '
+            f'mean R<sub>U</sub>/R<sub>D</sub> in ticks. Skips j&lt;{EPDF_J_START} '
+            f'(warm-up).</p>'
+            + d["epdf_table"]
         )
 
     return f"""<!DOCTYPE html>
@@ -199,6 +253,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
   {vol_section}
   {hist_section}
   {regime_section}
+  {epdf_section}
 </body>
 </html>"""
 
