@@ -1,9 +1,3 @@
-# --- Project-specific ---
-# Raw data is large and not ours to redistribute; keep it local.
-Order Management/data/**/*.csv
-# Assignment handout is Columbia/Hirsa IP — keep local, don't republish.
-Order Management/*.pdf
-
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -17,6 +11,7 @@ dist/
 .venv/
 venv/
 env/
+.env
 .python-version
 
 # --- Tooling caches ---
@@ -39,8 +34,13 @@ htmlcov/
 
 # --- OS ---
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
 Desktop.ini
+
+# --- Streamlit (if used) ---
+.streamlit/secrets.toml
 
 # --- Local Claude state ---
 .claude/settings.local.json
