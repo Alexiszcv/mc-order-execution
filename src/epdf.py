@@ -111,13 +111,15 @@ def compute_all_ranges(df_1min: pd.DataFrame, tau: int, tick: float,
     ts_start_ns = int(pd.Timestamp(t_start).value) if t_start is not None else None
     ts_end_ns   = int(pd.Timestamp(t_end).value)   if t_end   is not None else None
 
-    # Pre-group: one O(n_total) pass to build per-day numpy arrays
+    # Pre-group: one O(n_total) pass to build per-day numpy arrays.
+    # Force-convert each group's index to ns so the int64 arithmetic below
+    # is unit-correct on pandas 3.0+ (where the default datetime unit is us, not ns).
     proper_set = {pd.Timestamp(d).normalize() for d in proper_days_list}
-    day_data   = {}                          # day_ts → (idx_ns, high, low, open, vol)
+    day_data = {}  # day_ts → (idx_ns, high, low, open, vol)
     for day_ts, grp in df_1min.groupby(df_1min.index.normalize()):
         if day_ts in proper_set:
             day_data[day_ts] = (
-                grp.index.asi8,              # int64 ns — sortable with np.searchsorted
+                grp.index.as_unit("ns").asi8,  # int64 ns — sortable with np.searchsorted
                 grp["high"].to_numpy(),
                 grp["low"].to_numpy(),
                 grp["open"].to_numpy(),
