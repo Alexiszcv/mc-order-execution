@@ -1,6 +1,11 @@
 """EWMA / EWMV recursion tests vs a brute-force re-application of the documented formula.
 
 Exercises the team's `ewma_ewmv` in `src/regime.py`.
+
+NOTE: `_brute_force` below intentionally mirrors the *source loop*, so these tests
+prove only that the code matches its own docstring — they cannot catch deviations
+from the spec. For a spec-derived (Algorithm 1) oracle that does, see
+tests/test_ewma_spec.py.
 """
 
 from __future__ import annotations
@@ -11,7 +16,11 @@ from regime import ewma_ewmv
 
 
 def _brute_force(eta: np.ndarray, half_life: int) -> tuple[np.ndarray, np.ndarray]:
-    """Re-apply the documented recursion step by step. Mirrors the source loop."""
+    """Re-apply the documented recursion step by step.
+
+    Mirrors the source loop (NOT the spec) — so it reproduces the same eta[1] skip.
+    A genuinely spec-faithful oracle lives in tests/test_ewma_spec.py.
+    """
     n = len(eta)
     out_ewma = np.full(n, np.nan)
     out_ewmv = np.full(n, np.nan)

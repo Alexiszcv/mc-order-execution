@@ -179,3 +179,26 @@ team PR-compatibility. Everything downstream (imports, tests, packaging) hinges 
    more markets, v1/v2 agreement test.
 8. **[cleanup]** dead `compute_ranges` twin, broken `plot_volume()`, duplicate tick
    inference, duplicate `_load_1min`.
+
+## Stream A findings (2026-05-28) — EWMA/EWMV, ready to paste for the team
+
+**The deviation is a one-index shift, not just a dropped sample.** Algorithm 1
+updates step `j` with the *prior* interval `η_{j-1}` ("to avoid forward looking",
+per the spec's own note). In 0-based numpy that is `eta[j-2]`. `regime.ewma_ewmv`
+instead reads `eta[j-1]` in its `j = 3 … n` loop. Two consequences: (1) `eta[1]`
+(the 2nd observation) is never folded in — it is the unique never-read element;
+(2) every stored output incorporates the *current* interval's observation, so the
+series leads the spec by one step. The one-line fix would be `x = eta[j-2]` (and,
+symmetrically, the spec then never folds in the final `eta[n-1]`). Per the team
+decision we are **not** changing the loop; the gap is now pinned by
+`tests/test_ewma_spec.py` — a spec-derived oracle marked `xfail(strict=True)`, so
+it flips to a hard failure the day the loop is corrected — plus an explicit
+"`eta[1]` is ignored" regression test. The pre-existing `tests/test_ewma.py` oracle
+mirrors the implementation (same skip) and so cannot catch this; that false
+confidence is now annotated in its docstring.
+
+**EWMV deviation term (informational — matches spec).** The variance update uses
+the *current* mean, `(η_{j-1} − ewma_j)²` with `ewma_j` already updated by the new
+point. This is faithful to Algorithm 1 (line 20) but differs from EWMV variants
+that use the prior mean; it imparts a small downward bias. No action needed unless
+the team prefers the prior-mean convention.

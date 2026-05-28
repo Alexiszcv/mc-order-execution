@@ -22,6 +22,12 @@ def ewma_ewmv(eta, half_life: int):
          output written at position j-1
 
     Returns two numpy arrays of length n, with NaN at positions 0 and 1.
+
+    Note (EWMV bias): the deviation term uses the *current* mean,
+    ``(eta - ewma)`` with ``ewma`` already updated by the new observation. This
+    is faithful to Algorithm 1 (line 20) but differs from EWMV variants that use
+    the prior mean; it imparts a small downward bias. Flagged for the team;
+    unchanged.
     """
     eta = np.asarray(eta, dtype=float)
     n   = len(eta)
@@ -44,7 +50,11 @@ def ewma_ewmv(eta, half_life: int):
     ewmv_v = (sumWSS / sumW) ** 0.5
     # positions 0 and 1 stay NaN
 
-    # j = 3 … n  (0-based: eta[j-1])
+    # SPEC DEVIATION (do not change without team sign-off): Algorithm 1 folds in
+    # the prior interval eta[j-2] (eta_{j-1} in the spec's 1-based j) at step j;
+    # this loop reads eta[j-1], so eta[1] is never used and the series leads the
+    # spec by one observation. Pinned by tests/test_ewma_spec.py; see
+    # notes/component-review.md ("Stream A findings").
     for j in range(3, n + 1):
         x      = eta[j - 1]
         sumW   = lam * sumW   + 1.0
