@@ -1,33 +1,37 @@
-import pandas as pd
-import matplotlib.pyplot as plt
+
 import matplotlib.dates as mdates
-from pathlib import Path
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from order_mgmt.loader import (
+    FULL_SESSION_QUANTILE,
+    MIN_FRACTION_FOR_FULL_DAY,
+    active_day_mask,
+)
+from order_mgmt.ticks import infer_tick
 
 
-def _compute_stats(df: pd.DataFrame):
+def _compute_stats(
+    df: pd.DataFrame,
+    *,
+    min_fraction: float = MIN_FRACTION_FOR_FULL_DAY,
+    full_session_quantile: float = FULL_SESSION_QUANTILE,
+):
     """
     From a 1-minute bar DataFrame, return (daily, tick, proper_days, n_green, n_total).
     Called once per request so derived quantities are never recomputed from disk.
     """
-    daily = (
-        df.groupby(df.index.normalize())
-        .size()
-        .rename("traded_mins")
-        .to_frame()
-    )
-    full_index = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
-    daily = daily.reindex(full_index, fill_value=0)
+    # Active mask is computed over trading days only; the full-session quantile must not
+    # see the zero-filled calendar gaps added below for the figure.
+    counts = df.groupby(df.index.normalize()).size().rename("traded_mins")
+    active = active_day_mask(counts, min_fraction, full_session_quantile=full_session_quantile)
 
-    max_traded = daily["traded_mins"].max()
-    daily["is_active"] = daily["traded_mins"] >= 0.90 * max_traded
+    full_index = pd.date_range(counts.index.min(), counts.index.max(), freq="D")
+    daily = counts.to_frame().reindex(full_index, fill_value=0)
+    daily["is_active"] = active.reindex(full_index, fill_value=False)
 
     prices = pd.concat([df["open"], df["high"], df["low"], df["close"]])
-    prices = prices.round(8).drop_duplicates().sort_values().values
-    diffs  = prices[1:] - prices[:-1]
-    tick   = float(diffs[diffs > 1e-9].min())
-    from math import log10, floor
-    mag  = floor(log10(tick))
-    tick = round(tick, -mag + 7)
+    tick = infer_tick(prices.to_numpy())
 
     proper_days = list(daily[daily["is_active"]].index)
     n_green     = int(daily["is_active"].sum())
@@ -66,13 +70,7 @@ def get_tick(csv_path: str) -> float:
     df = pd.read_csv(csv_path, header=None,
                      names=["time", "open", "high", "low", "close", "volume"])
     prices = pd.concat([df["open"], df["high"], df["low"], df["close"]])
-    prices = prices.round(8).drop_duplicates().sort_values().values
-    diffs = prices[1:] - prices[:-1]
-    positive = diffs[diffs > 1e-9]
-    raw = float(positive.min())
-    from math import log10, floor
-    mag = floor(log10(raw))
-    return round(raw, -mag + 7)
+    return infer_tick(prices.to_numpy())
 
 
 def get_proper_days(csv_path: str) -> list:
@@ -80,21 +78,5 @@ def get_proper_days(csv_path: str) -> list:
     df = pd.read_csv(csv_path, header=None,
                      names=["time", "open", "high", "low", "close", "volume"])
     df["time"] = pd.to_datetime(df["time"], format="%Y.%m.%d.%H:%M:%S")
-    df["date"] = df["time"].dt.normalize()
-    daily = df.groupby("date").agg(traded_mins=("time", "count"))
-    max_traded = daily["traded_mins"].max()
-    return list(daily[daily["traded_mins"] >= 0.90 * max_traded].index)
-
-
-def plot_volume(csv_path: str) -> None:
-    fig, n_green, n_total = _build_figure(csv_path)
-    plt.show()
-    plt.close(fig)
-
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python plot_volume.py <path/to/file.csv>")
-        sys.exit(1)
-    plot_volume(sys.argv[1])
+    counts = df.groupby(df["time"].dt.normalize()).size()
+    return list(counts[active_day_mask(counts)].index)
