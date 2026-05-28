@@ -202,3 +202,25 @@ the *current* mean, `(η_{j-1} − ewma_j)²` with `ewma_j` already updated by t
 point. This is faithful to Algorithm 1 (line 20) but differs from EWMV variants
 that use the prior mean; it imparts a small downward bias. No action needed unless
 the team prefers the prior-mean convention.
+
+## Stream B findings (2026-05-28) — data/liquidity unification done
+
+Resolved priority #2 and #8 (tick dedup, broken `plot_volume()`). Two findings the other
+streams should know about:
+
+- **[correctness] Daily bar counts are BIMODAL, so neither 480-abs nor a median works.**
+  Per-day bar counts split into near-empty days (1–13 bars) and full sessions (~1380 Gold,
+  ~1366 Nasdaq, ~1100–1236 Bunds). A median sits in the *empty valley* (Gold median=220) and
+  would keep 1-bar days. The 480-absolute rule keeps half-empty partial days. Unified
+  definition is now **`bars >= 0.90 * p95(bar_counts)`** (`loader.active_day_mask`, shared by
+  `_compute_stats`); p95 estimates the true full session and is robust to one freak-long day.
+  Active-day counts changed (stricter): **Gold 208→132, Bunds 202→93** (kept days are all
+  near-full; Gold min 1368/1380, Bunds 1026/1139). `proper_days` from `_compute_stats` shrink
+  accordingly → C/D/E backtests now run on genuinely-full days only. Knobs:
+  `min_fraction=0.90`, `full_session_quantile=0.95` (threaded through `load_market`).
+- **[correctness] TICK_TABLE is in RAW exchange units; the CSVs are quoted at scaled
+  representations.** GBP is x100 (137.04), JPY x10000, HO in cents, VG shows 0.5 prints. So
+  `infer_tick` (data-scale) ≠ table value for GBP/JPY/HO/VG, by the scale factor. For
+  `R = ℓ·ε`, ε must be in the data's units → keep using `infer_tick`/`_compute_stats`'s tick
+  (the pipeline already does). Do NOT wire the raw `TICK_TABLE` value into the spread counts
+  or ℓ inflates by 100–10000× for those markets. Documented in `ticks.py`.
