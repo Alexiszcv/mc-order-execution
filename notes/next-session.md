@@ -2,12 +2,21 @@
 
 ## Where we are
 
-On branch **`stream/f-mc`** (forked from `research-tchimby`). The Monte Carlo layer
-(Stream F) is **fully implemented and committed** here. `research-tchimby` itself is
-unchanged from last session. Worktrees `a`–`e` (branches `stream/a-ewma` … `stream/e-ui`)
-still exist under `C:\Users\jltch\mc-wt\` but those streams are **not started**.
+On **`research-tchimby`** — streams **A, B, C, F are all merged in** (commits
+`5414214`/`5bc86c6`/`ef72e97`/`a75f223`); the only conflicts were doc-appends in
+`notes/component-review.md`, resolved by keeping every section. Streams **D and E are
+unstarted** (empty branches). The stream branches and worktrees under
+`C:\Users\jltch\mc-wt\` still exist (cleanup optional: `git worktree remove …`,
+`git branch -d stream/{a-ewma,b-data,c-backtest,f-mc}`).
 
-Tests: **58 passing** (was 32; +26 new MC tests). `ruff check` clean on all new code.
+Tests: **all passing** (one `xfail` = Stream A's spec-oracle for the EWMA eta[1] gap).
+`ruff check .` = **19 residual** issues (pre-existing / other-stream `.py` lint; was 145
+before the unicode/spec-name ignores + notebook exclude). New Stream F code is ruff-clean.
+
+**Note the merged behavior changes:** B's liquidity filter is now `bars >= 0.90*p95`
+(stricter — Gold active days 208→132, Bunds 202→93), so backtests run on genuinely-full
+days; C rewrote `backtest.py` (v1 state-consistency fix, `_simulate_fill`, faster VWAP).
+The MC smoke still agrees with the v2 backtest on Gold + Nasdaq.
 
 ## What got done this session
 
