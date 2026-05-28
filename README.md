@@ -9,10 +9,15 @@ to optimally place limit orders and minimize slippage.
 ## Installation
 
 ```bash
+# Editable install with dev dependencies (pytest, ruff, jupyter)
+pip install -e ".[dev]"
+# Minimal install (runtime only):
 pip install -r requirements.txt
 ```
 
 ## Usage
+
+### Interactive viewer
 
 ```bash
 python src/app.py
@@ -20,6 +25,27 @@ python src/app.py
 
 Open `http://localhost:8000` in your browser. Select a contract from the
 dropdown, adjust the τ slider, then click **Plot**.
+
+### End-to-end backtest demo
+
+```bash
+python scripts/run_v1.py
+```
+
+Loads each market's full contract history (rolled at daily-volume crossover),
+runs the regime-conditioned strategy on both sides (buy / sell), compares to
+TWAP and VWAP baselines, prints a slippage + fill-rate summary, and saves
+histograms to `reports/figures/`.
+
+### Tests
+
+```bash
+pytest -q
+```
+
+Math primitives (range identity `R = R_U + R_D`, EWMA recursion vs.
+brute-force reference, no-lookahead invariant) plus strategy and tick-table
+unit tests.
 
 ---
 
@@ -102,5 +128,98 @@ Since only a subset of days is retained, consecutive kept days are not necessari
 | M | Number of volume regime states | 3 |
 | N | Number of volatility regime states | 3 |
 | K | Number of price-direction states | 3 |
-| j_start | Minimum bars before ePDF estimation begins | 500 |
-| fill_rate_threshold | Minimum fill probability to place a limit order | 0.5 |
+| j_start | Minimum bars before ePDF estimation begins | 200 |
+| fill_rate_target | Minimum fill probability when picking ℓ\* | 0.6 |
+
+---
+
+## Strategy and backtest
+
+At each τ-window decision point:
+
+1. Classify the prior window into a regime cell `(m, n, k)` from EWMA-volume,
+   EWMA-range, and Δx quantile states.
+2. Look up the cell's empirical PDF of R_U (for a sell) or R_D (for a buy).
+3. Pick **ℓ\*** = largest tick distance such that `P(R ≥ ℓ\*) ≥ fill_rate_target`
+   (`order_mgmt.strategy.pick_ell_star`).
+4. Place a limit order at `open ± ℓ\* · tick`. If the realized R_U/R_D meets ℓ\*,
+   the order fills at the limit price; otherwise it chases at the window's close.
+
+Slippage is reported in ticks vs. a TWAP baseline (market-execute at open).
+The VWAP baseline is also computed for context.
+
+### Results (`scripts/run_v1.py`)
+
+Settings: τ=5, half_life=20, M=N=K=3, j_start=200, fill_rate_target=0.6.
+Full contract history per market (roll-aware loader).
+Two backtest variants reported:
+
+- **v1** — uses ePDFs built from the *full* history (lookahead permitted; the
+  "what's the maximum edge under perfect knowledge of marginal distributions"
+  upper bound).
+- **v2** — strict no-lookahead. At each decision *j*, ePDFs and quantile
+  thresholds are built incrementally from data strictly before *j*.
+  (`run_backtest_rolling`)
+
+| Market | Contracts rolled | Side | Variant | n | Fill rate | Avg (ticks) | Median (ticks) |
+|--------|------------------|------|---------|----|-----------|-------------|----------------|
+| Gold   | GCG24 / GCJ24 / GCM24 / GCQ24 | buy  | v1   | 35 437 | 66.9% | +0.06 | +2 |
+| Gold   | GCG24 / GCJ24 / GCM24 / GCQ24 | buy  | v2   | 35 410 | 66.1% | +0.04 | +3 |
+| Gold   | GCG24 / GCJ24 / GCM24 / GCQ24 | sell | v1   | 35 437 | 66.9% | +0.19 | +3 |
+| Gold   | GCG24 / GCJ24 / GCM24 / GCQ24 | sell | v2   | 35 410 | 66.1% | +0.18 | +3 |
+| Nasdaq | NQH20 / NQM20 / NQU20         | buy  | v1   | 39 391 | 68.6% | −0.17 | +6 |
+| Nasdaq | NQH20 / NQM20 / NQU20         | buy  | v2   | 39 364 | 71.9% | −0.12 | +6 |
+| Nasdaq | NQH20 / NQM20 / NQU20         | sell | v1   | 39 391 | 68.9% | +0.17 | +6 |
+| Nasdaq | NQH20 / NQM20 / NQU20         | sell | v2   | 39 364 | 71.3% | +0.12 | +7 |
+
+VWAP baseline averages are ±0.04 ticks on Gold and ±0.03 on Nasdaq —
+essentially flat against TWAP=open at the τ=5 horizon.
+
+**Interpretation.** v1 and v2 are within 0.05 ticks on the mean; the lookahead
+bias is small in this configuration. Both variants show:
+
+- **Strongly positive median** — the typical fill saves +2 to +7 ticks vs. TWAP
+- **Mean near zero** — dragged down by the chase-on-unfilled tail
+- **Fill rate 66–72%** — close to the 0.6 target
+
+The edge is real but modest. Tightening `fill_rate_target`, refining regime
+granularity, or adopting a smarter chase policy are the obvious levers.
+
+### Known simplifications
+
+- **VWAP execution assumption.** The baseline assumes you can transact at the
+  bar-typical-price (high + low + close) / 3 weighted by bar volume.
+  Optimistic; real VWAP execution has implementation shortfall.
+- **Chase price = window close.** Unfilled orders are charged at the close
+  of the τ-window. Real execution might allow earlier intervention or pay
+  half-spread, both of which would tighten the slippage tails.
+- **Tick size from heuristic by default.** For known markets the spec value
+  from `order_mgmt.ticks.TICK_TABLE` overrides the inferred minimum-price-
+  difference heuristic (`plot_volume.get_tick`). Unknown markets fall back to
+  the heuristic.
+
+---
+
+## Project layout
+
+```
+src/
+  app.py              Web viewer (port 8000) — volume, range histograms,
+                      regime indicators, conditional ePDFs, backtest panel
+  ranges.py           τ-window range computation (compute_ranges, compute_all_ranges)
+  epdf.py             Conditional ePDF builder (build_epdf) + raw CSV loader
+  plotting.py         Range histogram figure
+  plot_volume.py      Daily-volume figure + 90%-of-max liquidity filter + tick inference
+  regime.py           EWMA / EWMV recursion + regime visualisation
+  order_mgmt/
+    loader.py         Contract-roll-aware market loader (load_market, MarketSpec)
+    pipeline.py       Bridges load_market into the indexed-by-time format
+    ticks.py          Per-market spec tick-size table + resolver
+    strategy.py       pick_ell_star (limit-distance from ePDF + fill target)
+    baselines.py      TWAP / VWAP baselines
+    backtest.py       run_backtest (v1) + run_backtest_rolling (v2, no-lookahead)
+
+tests/                pytest — math primitives, strategy, ticks, pipeline, loader
+scripts/run_v1.py     End-to-end demo: Gold + Nasdaq, v1 vs v2 vs VWAP
+reports/figures/      Backtest figures (slippage histograms per market)
+```

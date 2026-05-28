@@ -7,21 +7,21 @@ import matplotlib.dates as mdates
 
 def ewma_ewmv(eta, half_life: int):
     """
-    Algorithme 1 — EWMA / EWMV sur la série eta avec demi-vie m = half_life.
+    Algorithm 1 — EWMA / EWMV on series eta with half-life m = half_life.
 
     lam = 2^(-1/m)
 
-    j=1 : tous les accumulateurs à 0, sortie NaN
-    j=2 : sumW=1, sumWX=eta[0], ewma=sumWX/sumW,
-           sumWSS=(eta[0]-ewma)², ewmv=sqrt(sumWSS/sumW), sortie NaN
-    j≥3 : sumW = lam·sumW + 1
-           sumWX = lam·sumWX + eta[j-1]
-           ewma  = sumWX / sumW
-           sumWSS = lam·sumWSS + (eta[j-1] - ewma)²
-           ewmv  = sqrt(sumWSS / sumW)
-           sortie à la position j-1
+    j=1: all accumulators initialised to 0, output NaN
+    j=2: sumW=1, sumWX=eta[0], ewma=sumWX/sumW,
+         sumWSS=(eta[0]-ewma)², ewmv=sqrt(sumWSS/sumW), output NaN
+    j≥3: sumW = lam·sumW + 1
+         sumWX = lam·sumWX + eta[j-1]
+         ewma  = sumWX / sumW
+         sumWSS = lam·sumWSS + (eta[j-1] - ewma)²
+         ewmv  = sqrt(sumWSS / sumW)
+         output written at position j-1
 
-    Retourne deux arrays numpy de longueur n, NaN aux positions 0 et 1.
+    Returns two numpy arrays of length n, with NaN at positions 0 and 1.
     """
     eta = np.asarray(eta, dtype=float)
     n   = len(eta)
@@ -33,18 +33,18 @@ def ewma_ewmv(eta, half_life: int):
     if n < 3:
         return out_ewma, out_ewmv
 
-    # j = 1 : initialisation (tous accumulateurs à 0)
+    # j = 1: init all accumulators to 0
     sumW = sumWX = sumWSS = 0.0
 
-    # j = 2 : premier chargement
+    # j = 2: first observation loaded
     sumW   = 1.0
     sumWX  = eta[0]
     ewma_v = sumWX / sumW
     sumWSS = (eta[0] - ewma_v) ** 2
     ewmv_v = (sumWSS / sumW) ** 0.5
-    # positions 0 et 1 restent NaN
+    # positions 0 and 1 stay NaN
 
-    # j = 3 … n  (indices Python 0-based : eta[j-1])
+    # j = 3 … n  (0-based: eta[j-1])
     for j in range(3, n + 1):
         x      = eta[j - 1]
         sumW   = lam * sumW   + 1.0
@@ -152,10 +152,10 @@ if __name__ == "__main__":
     eta  = rng.standard_normal(200)
     ewma, ewmv = ewma_ewmv(eta, half_life=20)
 
-    assert np.isnan(ewma[0]) and np.isnan(ewma[1]), "positions 0 et 1 doivent être NaN"
+    assert np.isnan(ewma[0]) and np.isnan(ewma[1]), "positions 0 and 1 must be NaN"
     assert np.isnan(ewmv[0]) and np.isnan(ewmv[1])
-    assert not np.any(np.isnan(ewma[2:])),          "aucun NaN au-delà de la position 1"
-    assert np.all(ewmv[2:] >= 0),                   "ewmv doit être positif ou nul"
+    assert not np.any(np.isnan(ewma[2:])),          "no NaN beyond position 1"
+    assert np.all(ewmv[2:] >= 0),                   "ewmv must be non-negative"
 
     print(f"n={len(eta)}, half_life=20, lam={2**(-1/20):.6f}")
     print(f"ewma[2:7]  = {ewma[2:7].round(4)}")

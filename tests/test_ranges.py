@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from epdf import compute_all_ranges
+from ranges import compute_all_ranges
 
 
 def _synth_window(date: str, opens, highs, lows, closes, vols) -> pd.DataFrame:

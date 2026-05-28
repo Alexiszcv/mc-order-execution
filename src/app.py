@@ -13,16 +13,47 @@ from urllib.parse import parse_qs, urlparse
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 
 sys.path.insert(0, str(Path(__file__).parent))
 from plot_volume import _build_figure, _compute_stats  # noqa: E402
-from epdf import _load_1min, compute_all_ranges, _build_histogram_figure, build_epdf  # noqa: E402
+from epdf import _load_1min, build_epdf  # noqa: E402
+from plotting import build_histogram_figure as _build_histogram_figure  # noqa: E402
+from ranges import compute_all_ranges  # noqa: E402
 from regime import compute_ewma_series, _build_regime_figure  # noqa: E402
 
+from order_mgmt.backtest import run_backtest  # noqa: E402
+from order_mgmt.baselines import vwap_baseline  # noqa: E402
+from order_mgmt.ticks import resolve_tick  # noqa: E402
+
 EPDF_J_START = 200
+BACKTEST_FILL_RATE_TARGET = 0.6
+
+
+def _build_backtest_figure(
+    strat_buy_slip, vwap_buy_slip, strat_sell_slip, vwap_sell_slip, ticker: str
+):
+    """1x2 slippage histograms (buy / sell) — strategy vs VWAP."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+    panels = [
+        (axes[0], "buy", strat_buy_slip, vwap_buy_slip),
+        (axes[1], "sell", strat_sell_slip, vwap_sell_slip),
+    ]
+    for ax, side, strat, vwap in panels:
+        if strat:
+            ax.hist(strat, bins=40, alpha=0.6, label="Strategy", color="steelblue")
+        if vwap:
+            ax.hist(vwap, bins=40, alpha=0.6, label="VWAP", color="orange")
+        ax.axvline(0, color="black", linestyle="--", linewidth=0.6)
+        ax.set_title(f"{ticker} — {side} (slippage vs open)")
+        ax.set_xlabel("ticks")
+        ax.set_ylabel("count")
+        ax.legend()
+    plt.tight_layout()
+    return fig
 
 
 def _build_epdf_summary(counts_RU, counts_RD, M: int, N: int, K: int) -> str:
@@ -101,15 +132,41 @@ def _render(csv_path: Path, tau: int, half_life: int,
         counts_RU, counts_RD, M=n_states_vol, N=n_states_range, K=k_states_dx
     )
 
+    # Backtest: regime-conditioned strategy vs VWAP, both sides.
+    tick_eff = resolve_tick(ticker, tick)
+    bt_buy = run_backtest(
+        df_1min, tau=tau, tick=tick_eff, proper_days=proper_days, side="buy",
+        fill_rate_target=BACKTEST_FILL_RATE_TARGET, half_life=half_life,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    bt_sell = run_backtest(
+        df_1min, tau=tau, tick=tick_eff, proper_days=proper_days, side="sell",
+        fill_rate_target=BACKTEST_FILL_RATE_TARGET, half_life=half_life,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    vwap_buy = vwap_baseline(df_1min, t_list[EPDF_J_START:], tau=tau, tick=tick_eff, side="buy")
+    vwap_sell = vwap_baseline(df_1min, t_list[EPDF_J_START:], tau=tau, tick=tick_eff, side="sell")
+
+    fig_bt = _build_backtest_figure(
+        bt_buy.slippage_ticks, vwap_buy.slippage_ticks,
+        bt_sell.slippage_ticks, vwap_sell.slippage_ticks,
+        ticker,
+    )
+
     return dict(
         vol_b64    = _fig_to_b64(fig_vol),
         hist_b64   = _fig_to_b64(fig_hist),
         regime_b64 = _fig_to_b64(fig_regime),
+        bt_b64     = _fig_to_b64(fig_bt),
         epdf_table = epdf_table,
         n_green    = n_green,
         n_total    = n_total,
-        tick       = tick,
+        tick       = tick_eff,
         n_windows  = len(ell_r),
+        bt_buy     = bt_buy,
+        bt_sell    = bt_sell,
+        vwap_buy_avg  = float(np.mean(vwap_buy.slippage_ticks)) if vwap_buy.slippage_ticks else 0.0,
+        vwap_sell_avg = float(np.mean(vwap_sell.slippage_ticks)) if vwap_sell.slippage_ticks else 0.0,
     )
 
 
@@ -139,7 +196,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
                 f' style="max-width:100%;margin-top:20px">') if b64 else ""
 
     stats = ""
-    vol_section = hist_section = regime_section = epdf_section = ""
+    vol_section = hist_section = regime_section = epdf_section = backtest_section = ""
     if data:
         d = data
         stats = (
@@ -183,6 +240,20 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
             f'mean R<sub>U</sub>/R<sub>D</sub> in ticks. Skips j&lt;{EPDF_J_START} '
             f'(warm-up).</p>'
             + d["epdf_table"]
+        )
+        bb, bs = d["bt_buy"], d["bt_sell"]
+        backtest_section = (
+            '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
+            'Backtest — strategy vs VWAP (TWAP=open is the zero baseline)</h3>'
+            f'<p style="color:#666;font-size:.9rem">'
+            f'fill_rate_target = {BACKTEST_FILL_RATE_TARGET}. '
+            f'<strong>buy:</strong> n={bb.n_decisions}, fill={bb.fill_rate:.1%}, '
+            f'avg={bb.avg_slippage_ticks:+.2f}t, median={bb.median_slippage_ticks:+.2f}t '
+            f'(VWAP avg={d["vwap_buy_avg"]:+.2f}t). '
+            f'<strong>sell:</strong> n={bs.n_decisions}, fill={bs.fill_rate:.1%}, '
+            f'avg={bs.avg_slippage_ticks:+.2f}t, median={bs.median_slippage_ticks:+.2f}t '
+            f'(VWAP avg={d["vwap_sell_avg"]:+.2f}t).</p>'
+            + img(d["bt_b64"])
         )
 
     return f"""<!DOCTYPE html>
@@ -254,6 +325,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
   {hist_section}
   {regime_section}
   {epdf_section}
+  {backtest_section}
 </body>
 </html>"""
 
