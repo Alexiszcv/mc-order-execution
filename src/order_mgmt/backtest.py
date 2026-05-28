@@ -3,10 +3,17 @@
 Two variants:
   - `run_backtest` (v1): uses the ePDFs and quantile thresholds built from the FULL
     history at every decision. Permissive — quantifies the maximum achievable edge
-    under perfect information about marginal distributions.
+    under perfect information about marginal distributions. The full-history thresholds
+    are used consistently for BOTH building the ePDFs and looking them up, so a window
+    is always binned into and read from the same regime cell.
   - `run_backtest_rolling` (v2): streaming, no-lookahead. At each decision j, the ePDFs
     and quantile thresholds use only windows j_start..j-1. Mirrors the build_epdf
     streaming pattern; same O(n log n) complexity.
+
+Benchmark: slippage is signed ticks vs the window OPEN (positive = beat the open).
+The TWAP baseline executes at the open, so TWAP slippage is identically zero by
+construction — it is the zero line, not an informative comparator. The VWAP baseline
+is the informative benchmark.
 """
 
 from __future__ import annotations
@@ -20,13 +27,19 @@ import numpy as np
 import pandas as pd
 
 # Team modules (flat src/ layout — pythonpath = ["src"] is set in pyproject.toml).
-from epdf import build_epdf
 from ranges import compute_all_ranges
 from regime import compute_ewma_series
 
 from order_mgmt.strategy import pick_ell_star
 
 Side = Literal["buy", "sell"]
+
+# Optional precomputed-array fast path: compute the range/EWMA passes once and reuse them
+# across both backtests + the VWAP baseline instead of recomputing per call.
+#   Ranges = compute_all_ranges(...) -> (t_list, ell_r, ell_u, ell_d, vol_list, dx_list)
+#   Ewma   = compute_ewma_series(...) -> (ewma_range, ewma_vol)
+Ranges = tuple[list, list, list, list, list, list]
+Ewma = tuple[np.ndarray, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,87 @@ def _final_sorted(arr: np.ndarray) -> list[float]:
     return sorted(float(v) for v in arr if not np.isnan(v))
 
 
+def _simulate_fill(
+    side: Side,
+    ell_star: int,
+    ell_u_j: int,
+    ell_d_j: int,
+    open_j: float,
+    close_j: float,
+    tick: float,
+) -> tuple[float, bool, float]:
+    """Simulate one window's execution against the realized range.
+
+    Posts a limit ell_star ticks from the open; fills at open±ell_star·tick iff the
+    realized half-range reaches ell_star (R_U for a sell, R_D for a buy), else chases
+    at the window's closing price. Returns (price, filled, slip) where slip is signed
+    ticks vs the open benchmark (positive = beat the open).
+    """
+    if side == "sell":
+        if ell_u_j >= ell_star:
+            price = open_j + ell_star * tick
+            filled = True
+        else:
+            price = close_j
+            filled = False
+        slip = (price - open_j) / tick
+    else:
+        if ell_d_j >= ell_star:
+            price = open_j - ell_star * tick
+            filled = True
+        else:
+            price = close_j
+            filled = False
+        slip = (open_j - price) / tick
+    return price, filled, slip
+
+
+def _build_counts_full_history(
+    ell_u: list[int],
+    ell_d: list[int],
+    ewma_vol_arr: np.ndarray,
+    ewma_range_arr: np.ndarray,
+    dx_arr: np.ndarray,
+    vol_sorted: list[float],
+    range_sorted: list[float],
+    dx_sorted: list[float],
+    M: int,
+    N: int,
+    K: int,
+    j_start: int,
+) -> tuple[dict, dict]:
+    """Accumulate per-regime R_U / R_D counts using FULL-history quantile thresholds.
+
+    v1 is permissive by design: it conditions on the marginal distribution estimated
+    over the whole sample. The invariant that makes v1 internally consistent is that
+    the SAME full-history sorted lists are used here (to bin each window into a cell)
+    and in the decision loop (to look the cell up) — so a window is always accumulated
+    into and read from the same regime cell. Regime for window j is read from j-1,
+    mirroring `build_epdf`, the only difference being the threshold basis (full history
+    here vs expanding prefix in build_epdf's strict no-lookahead path).
+    """
+    counts_RU: dict[tuple[int, int, int], Counter] = {}
+    counts_RD: dict[tuple[int, int, int], Counter] = {}
+    for j in range(max(j_start, 1), len(ell_u)):
+        v_prev = ewma_vol_arr[j - 1]
+        r_prev = ewma_range_arr[j - 1]
+        d_prev = dx_arr[j - 1]
+        if np.isnan(v_prev) or np.isnan(r_prev) or np.isnan(d_prev):
+            continue
+        m = _state(float(v_prev), vol_sorted, M)
+        n = _state(float(r_prev), range_sorted, N)
+        k = _state(float(d_prev), dx_sorted, K)
+        if m is None or n is None or k is None:
+            continue
+        key = (m, n, k)
+        if key not in counts_RU:
+            counts_RU[key] = Counter()
+            counts_RD[key] = Counter()
+        counts_RU[key][ell_u[j]] += 1
+        counts_RD[key][ell_d[j]] += 1
+    return counts_RU, counts_RD
+
+
 def run_backtest(
     df_1min: pd.DataFrame,
     tau: int,
@@ -69,33 +163,41 @@ def run_backtest(
     N: int,
     K: int,
     j_start: int,
+    ranges: Ranges | None = None,
+    ewma: Ewma | None = None,
 ) -> BacktestResult:
-    t_list, _ell_r, ell_u, ell_d, vol_list, dx_list = compute_all_ranges(
-        df_1min, tau, tick, proper_days
-    )
+    """v1 backtest (permissive, full-history thresholds — see module docstring).
+
+    Callers may pass precomputed `ranges` (from compute_all_ranges) and `ewma` (from
+    compute_ewma_series) to skip recomputing those passes; both default to None →
+    computed internally, so the signature stays backward-compatible.
+    """
+    if ranges is None:
+        ranges = compute_all_ranges(df_1min, tau, tick, proper_days)
+    t_list, _ell_r, ell_u, ell_d, vol_list, dx_list = ranges
     if len(t_list) <= j_start:
         return BacktestResult(side, 0, 0, 0.0, [], [], [], 0.0, 0.0, 0.0)
 
-    ewma_range, ewma_vol = compute_ewma_series(t_list, _ell_r, vol_list, half_life)
+    if ewma is None:
+        ewma = compute_ewma_series(t_list, _ell_r, vol_list, half_life)
+    ewma_range, ewma_vol = ewma
 
-    counts_RU, counts_RD, _thr = build_epdf(
-        t_list,
-        ell_u,
-        ell_d,
-        list(ewma_vol),
-        list(ewma_range),
-        dx_list,
-        M=M,
-        N=N,
-        K=K,
-        j_start=j_start,
+    ewma_vol_arr = np.asarray(ewma_vol, dtype=float)
+    ewma_range_arr = np.asarray(ewma_range, dtype=float)
+    dx_arr = np.asarray(dx_list, dtype=float)
+
+    # v1 (permissive) regimes are defined by full-history quantile thresholds. The SAME
+    # sorted lists drive both ePDF construction (_build_counts_full_history) and the
+    # decision lookup below, so every window is accumulated into and read from the same
+    # regime cell — no build/lookup basis mismatch. (v2 uses the strict no-lookahead path.)
+    vol_sorted = _final_sorted(ewma_vol_arr)
+    range_sorted = _final_sorted(ewma_range_arr)
+    dx_sorted = _final_sorted(dx_arr)
+
+    counts_RU, counts_RD = _build_counts_full_history(
+        ell_u, ell_d, ewma_vol_arr, ewma_range_arr, dx_arr,
+        vol_sorted, range_sorted, dx_sorted, M, N, K, j_start,
     )
-
-    # Final thresholds (v1 lookahead-permitting simplification — see module docstring).
-    vol_sorted = _final_sorted(np.asarray(ewma_vol, dtype=float))
-    range_sorted = _final_sorted(np.asarray(ewma_range, dtype=float))
-    dx_sorted = _final_sorted(np.asarray(dx_list, dtype=float))
-
     counts_lookup = counts_RU if side == "sell" else counts_RD
 
     opens_series = df_1min["open"]
@@ -106,10 +208,6 @@ def run_backtest(
     benchmark: list[float] = []
     slippage: list[float] = []
     n_filled = 0
-
-    ewma_vol_arr = np.asarray(ewma_vol, dtype=float)
-    ewma_range_arr = np.asarray(ewma_range, dtype=float)
-    dx_arr = np.asarray(dx_list, dtype=float)
 
     for j in range(max(j_start, 1), len(t_list)):
         v_prev = ewma_vol_arr[j - 1]
@@ -135,22 +233,11 @@ def run_backtest(
         except KeyError:
             continue
 
-        if side == "sell":
-            # limit set ell_star ticks above open; fills iff R_U ≥ ell_star
-            if ell_u[j] >= ell_star:
-                price = open_j + ell_star * tick
-                n_filled += 1
-            else:
-                price = close_j  # chase at window close
-            slip = (price - open_j) / tick
-        else:
-            if ell_d[j] >= ell_star:
-                price = open_j - ell_star * tick
-                n_filled += 1
-            else:
-                price = close_j
-            slip = (open_j - price) / tick
-
+        price, filled, slip = _simulate_fill(
+            side, ell_star, ell_u[j], ell_d[j], open_j, close_j, tick
+        )
+        if filled:
+            n_filled += 1
         realized.append(price)
         benchmark.append(open_j)
         slippage.append(slip)
@@ -188,6 +275,8 @@ def run_backtest_rolling(
     N: int,
     K: int,
     j_start: int,
+    ranges: Ranges | None = None,
+    ewma: Ewma | None = None,
 ) -> BacktestResult:
     """v2 backtest: strict no-lookahead.
 
@@ -199,15 +288,19 @@ def run_backtest_rolling(
       4. After the decision, fold j-1's observation into the sorted lists AND
          increment counts at (regime, ell_u[j]) for future cycles.
 
-    Same O(n log n) cost as `epdf.build_epdf`.
+    Same O(n log n) cost as `epdf.build_epdf`. Callers may pass precomputed `ranges`
+    (from compute_all_ranges) and `ewma` (from compute_ewma_series) to skip recomputing
+    those passes; both default to None → computed internally.
     """
-    t_list, _ell_r, ell_u, ell_d, vol_list, dx_list = compute_all_ranges(
-        df_1min, tau, tick, proper_days
-    )
+    if ranges is None:
+        ranges = compute_all_ranges(df_1min, tau, tick, proper_days)
+    t_list, _ell_r, ell_u, ell_d, vol_list, dx_list = ranges
     if len(t_list) <= j_start:
         return BacktestResult(side, 0, 0, 0.0, [], [], [], 0.0, 0.0, 0.0)
 
-    ewma_range, ewma_vol = compute_ewma_series(t_list, _ell_r, vol_list, half_life)
+    if ewma is None:
+        ewma = compute_ewma_series(t_list, _ell_r, vol_list, half_life)
+    ewma_range, ewma_vol = ewma
     ev = np.asarray(ewma_vol, dtype=float)
     er = np.asarray(ewma_range, dtype=float)
     dx_arr = np.asarray(dx_list, dtype=float)
@@ -254,20 +347,11 @@ def run_backtest_rolling(
                     open_j = close_j = None
 
                 if open_j is not None:
-                    if side == "sell":
-                        if ell_u[j] >= ell_star:
-                            price = open_j + ell_star * tick
-                            n_filled += 1
-                        else:
-                            price = close_j
-                        slip = (price - open_j) / tick
-                    else:
-                        if ell_d[j] >= ell_star:
-                            price = open_j - ell_star * tick
-                            n_filled += 1
-                        else:
-                            price = close_j
-                        slip = (open_j - price) / tick
+                    price, filled, slip = _simulate_fill(
+                        side, ell_star, ell_u[j], ell_d[j], open_j, close_j, tick
+                    )
+                    if filled:
+                        n_filled += 1
                     realized.append(price)
                     benchmark.append(open_j)
                     slippage.append(slip)
