@@ -1,90 +1,64 @@
-# Next session pickup (saved 2026-05-27)
+# Next session pickup (saved 2026-05-28)
 
 ## Where we are
 
-Branch `research-tchimby`, **10 commits ahead of `origin/research-tchimby`**, nothing pushed yet.
-Tests **32 passing**. Working tree clean except `Order Management/` (untracked
-leftover from the old folder layout — safe to delete).
+On branch **`stream/f-mc`** (forked from `research-tchimby`). The Monte Carlo layer
+(Stream F) is **fully implemented and committed** here. `research-tchimby` itself is
+unchanged from last session. Worktrees `a`–`e` (branches `stream/a-ewma` … `stream/e-ui`)
+still exist under `C:\Users\jltch\mc-wt\` but those streams are **not started**.
 
-```
-cd7be40  feat(phase-b-c-v2): integration, polish, no-lookahead backtest
-5023494  feat(phase-a): tests, strategy, backtest, baselines, demo, UI ePDF panel
-1af5374  fix(epdf): convert per-day index to ns before int64 arithmetic
-2476edd  Merge team/main into research-tchimby as Phase A foundation
-8e71477  chore(claude): clean up settings.json /doctor warnings
-```
+Tests: **58 passing** (was 32; +26 new MC tests). `ruff check` clean on all new code.
 
 ## What got done this session
 
-- **Phase A** — tests, strategy (`pick_ell_star`), v1 backtest, TWAP/VWAP baselines,
-  two-market demo, UI ePDF panel.
-- **Phase B** — roll-aware pipeline, tick-size table, hygiene (dead code, requirements
-  sync), module split (`ranges.py`, `plotting.py`, `epdf.py`).
-- **Phase C** — UI backtest panel, README results section, French → English in
-  `regime.py`.
-- **v2 stretch** — `run_backtest_rolling`: strict no-lookahead streaming variant.
-  Tested via day-truncation invariant on real Gold data.
+1. **Component review** — cold read of all 14 modules → `notes/component-review.md`
+   (tagged findings + priority ranking; now also has a "Stream F" section).
+2. **`plan/` folder** — parallel work streams A–F (self-contained briefs, worktree recipe,
+   shared-contract rules). Streams A–E are planned but unstarted.
+3. **Monte Carlo plan** — approved, saved at
+   `C:\Users\jltch\.claude\plans\my-project-is-suposed-peppy-waterfall.md`
+   (three distribution definitions compared: empirical / fitted-parametric / GBM-path).
+4. **Stream F implemented** — new package `src/order_mgmt/mc/`:
+   `results, samplers, bootstrap, fit, paths, simulator, variance_reduction, validation`
+   + `tests/test_mc_*.py` (26 tests) + `scripts/run_mc_smoke.py` + `notebooks/mc_showcase.ipynb`
+   + 6 figures in `reports/figures/mc_*.png`.
+5. **Repo-wide `pyproject.toml` ruff change** — ignore `RUF001/2/3` (math unicode σ/τ/ℓ) and
+   `N803/N806` (spec names M/N/K/R_U). Also clears ~85 pre-existing ruff errors.
 
-Also: a one-line **pandas-3.0 fix** in `compute_all_ranges` (`asi8` returned μs not
-ns under the new default datetime unit, breaking everything; team should probably
-PR this back).
+## Headline (smoke on Gold tick=0.10, Nasdaq tick=0.25)
 
-## Headline result
+MC fill rate agrees with the v2 backtest (Gold 64.6% MC vs 66.1% backtest; no divergence
+flag); fits land at mean KS ≈ 0.04. **Fill rate is the robust quantity; slippage is looser**
+for empirical/fitted (their chase-on-unfill close is modeled as independent N(0,σ²); gbm
+couples it to the path).
 
-v1 vs v2 agree within 0.05 ticks on the mean → lookahead bias is small at this
-config. The strategy shows:
+## Caveats carried forward (also in component-review.md)
 
-- **Median** +2 to +7 ticks vs TWAP (typical fill saves several ticks)
-- **Mean** near zero (chase-on-unfill tail eats most of the gain)
-- **Fill rate** 66–72% (close to the 0.6 target)
-
-Memory: `memory/v1_v2_lookahead_finding.md`.
+- σ for the parametric/GBM model is calibrated from the EWMA **range level** E[R], because
+  `regime.compute_ewma_series` discards the EWMV. Use `ewma_ewmv(...)[1]` if a stdev-based
+  calibration is ever wanted.
+- Marginal-vs-rolling gap: regime-marginal MC (full-history per-cell ℓ*, frequency weights)
+  differs from the rolling v2 backtest by a few % (Nasdaq ~9%, within the 0.10 cross-check).
+- The pyproject ruff change is repo-wide — other streams inherit it on merge.
 
 ## Possible next moves (pick one)
 
-1. **Push to `origin/research-tchimby`** — preserves your work remotely. `git push
-   origin research-tchimby`.
-2. **Open a PR against team `main`** — `gh pr create --base main --head
-   research-tchimby` against `Alexiszcv/mc-order-execution`. Talk to the team about
-   the pandas-3.0 fix and the `ewma_ewmv` skipped-eta[1] quirk before merging.
-3. **Tighten the strategy** — sweep `fill_rate_target ∈ {0.4, 0.5, 0.6, 0.7, 0.8}`,
-   plot the Pareto curve of mean-slippage vs fill-rate. Should show whether the
-   sweet spot is somewhere other than 0.6.
-4. **Smarter chase policy** — current v1/v2 chase at window close. Try
-   "chase at mid" or "chase as soon as price moves >X ticks against the limit"
-   and see if the negative tail shrinks.
-5. **Address the `ewma_ewmv` quirk** — the function skips `eta[1]` in
-   initialisation. Document and either fix or confirm with the team that the
-   docstring's behaviour is what they want.
-6. **Run on more markets** — Bunds (RX), EuroStoxx (VG), GBP (BP) are present
-   in `data/`. Add them to `MARKETS` in `scripts/run_v1.py`.
+1. **Merge `stream/f-mc` → `research-tchimby`** (local): `git switch research-tchimby &&
+   git merge --no-ff stream/f-mc`. No conflicts expected (additive files; only pyproject /
+   notes / plan README are shared edits).
+2. **Start a planned stream** (A–E) in its worktree — see `plan/stream-*.md`. Stream A
+   (EWMA eta[1] doc + spec test) and C (v1 state-assignment fix) are the highest-value
+   correctness items.
+3. **Polish the notebook narrative** for lecture (it runs end-to-end; figures regenerate via
+   `jupyter nbconvert --execute`).
+4. **Push** `stream/f-mc` to a remote (nothing is pushed yet).
 
-## Open questions
-
-- Is the `Order Management/` directory still needed? It's the pre-merge folder
-  layout with the assignment PDF. The team has `TermProject2_OrderExecution.pdf`
-  at the root now. Either delete or copy any local research-only files out
-  first.
-- The team's `ewma_ewmv` skips `eta[1]` in init — is this intended or a bug?
-  Their docstring says it is; the spec wants every observation folded in. Worth
-  a Slack message before any "fix".
-- Do you want to push your work to your personal remote (`personal/main`) as
-  well as the team repo's research branch? You haven't touched `personal/main`
-  in this session — its tip is at `3e133c6 ci(claude): use
-  CLAUDE_CODE_OAUTH_TOKEN instead of API key`.
-
-## Useful commands to resume with
+## Useful commands
 
 ```bash
-# Re-run the demo and re-generate figures
-python scripts/run_v1.py
-
-# Re-run all tests
-pytest -q
-
-# See what's ahead of remote
-git log --oneline origin/research-tchimby..HEAD
-
-# See what's in the team's main vs your branch
-git log --oneline origin/main..HEAD
+pytest -q                                   # 58 passing
+python scripts/run_mc_smoke.py              # MC end-to-end on 2 markets
+ruff check src/order_mgmt/mc                 # clean
+git log --oneline -5                         # see the Stream F commit(s)
+git worktree list                            # main repo + mc-wt/a..e
 ```
