@@ -33,6 +33,7 @@ addopts = "-q --strict-markers"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["*.ipynb"]  # notebooks are scratch (CLAUDE.md); don't lint cell style
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "RUF"]
