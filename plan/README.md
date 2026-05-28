@@ -45,8 +45,9 @@ throwaway venv in the worktree (`uv venv && uv pip install -e ".[dev]"`).
 | C — backtest | `stream/c-backtest` | `backtest.py`, `baselines.py`, `test_backtest.py` | strategy, ranges, epdf, regime |
 | D — strategy research | `stream/d-strategy` | `strategy.py`, `scripts/sweep_*.py`(new), `test_strategy.py` | backtest, baselines |
 | E — UI alignment | `stream/e-ui` | `app.py`, `plotting.py` | pipeline, plot_volume, backtest |
+| F — Monte Carlo | `stream/f-mc` | `order_mgmt/mc/**`(new), `test_mc_*.py`(new), `scripts/run_mc_smoke.py`(new), `notebooks/mc_showcase.ipynb`(new) | strategy, epdf, ranges, regime, baselines, backtest, pipeline |
 
-Streams **A, B, C, D, E touch disjoint files** and may run concurrently. Read-only
+Streams **A, B, C, D, E, F touch disjoint files** and may run concurrently. Read-only
 consumers depend on the **shared contracts** below — owners must not break them silently.
 
 ## Shared contracts (do NOT change signatures without announcing in the merge PR)
