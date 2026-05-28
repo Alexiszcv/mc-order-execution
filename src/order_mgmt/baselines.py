@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 Side = Literal["buy", "sell"]
@@ -43,24 +44,42 @@ def vwap_baseline(
 
     Bar typical price = (high + low + close) / 3.
     Slippage = (vwap − open) / tick for sell, (open − vwap) / tick for buy.
+
+    Each window [t, t+τ) is located by `searchsorted` on the int64-ns index (O(log n)
+    per window, O(n log n) overall) instead of a per-window boolean-mask `.loc`
+    (O(n²)). Behaviour is identical to the mask version — see test_backtest.py.
     """
+    if not t_list:
+        return BaselineResult("VWAP", side, 0, [], [], [])
+
+    dt_tau_ns = int(pd.Timedelta(minutes=tau).value)
+    opens_series = df_1min["open"]
+
+    # int64-ns is unit-correct on pandas 3.0+ (default datetime unit is µs, not ns).
+    idx_ns = df_1min.index.as_unit("ns").asi8
+    typ = ((df_1min["high"] + df_1min["low"] + df_1min["close"]) / 3.0).to_numpy()
+    vol = df_1min["volume"].to_numpy()
+    if not df_1min.index.is_monotonic_increasing:
+        order = np.argsort(idx_ns, kind="stable")
+        idx_ns, typ, vol = idx_ns[order], typ[order], vol[order]
+
     realized: list[float] = []
     benchmark: list[float] = []
     slippage: list[float] = []
 
-    dt_tau = pd.Timedelta(minutes=tau)
-    opens_series = df_1min["open"]
-
     for t in t_list:
-        window = df_1min.loc[(df_1min.index >= t) & (df_1min.index < t + dt_tau)]
-        if window.empty:
+        t_ns = int(pd.Timestamp(t).value)
+        lo = int(np.searchsorted(idx_ns, t_ns, side="left"))
+        hi = int(np.searchsorted(idx_ns, t_ns + dt_tau_ns, side="left"))
+        if hi <= lo:
             continue
-        typ = (window["high"] + window["low"] + window["close"]) / 3.0
-        v = window["volume"]
-        if v.sum() == 0:
-            vwap = float(typ.mean())
+        w_typ = typ[lo:hi]
+        w_vol = vol[lo:hi]
+        vsum = w_vol.sum()
+        if vsum == 0:
+            vwap = float(w_typ.mean())
         else:
-            vwap = float((typ * v).sum() / v.sum())
+            vwap = float((w_typ * w_vol).sum() / vsum)
         open_j = float(opens_series.loc[t])
         realized.append(vwap)
         benchmark.append(open_j)

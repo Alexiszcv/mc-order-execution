@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from plot_volume import _compute_stats  # noqa: E402
 from ranges import compute_all_ranges  # noqa: E402
+from regime import compute_ewma_series  # noqa: E402
 
 from order_mgmt.backtest import run_backtest, run_backtest_rolling  # noqa: E402
 from order_mgmt.baselines import vwap_baseline  # noqa: E402
@@ -79,21 +80,26 @@ def run_one_market(substring: str, label: str) -> dict | None:
     src = "spec" if tick != inferred_tick else "heuristic"
     print(f"  tick = {tick:g} ({src}; inferred {inferred_tick:g}); active days {n_green}/{n_total}")
 
+    # Compute the range + EWMA passes ONCE per market and reuse them across both
+    # backtests (buy/sell) and the VWAP baseline, instead of recomputing each call.
+    ranges = compute_all_ranges(df_ohlcv, TAU, tick, proper_days)
+    t_list = ranges[0]
+    ewma = compute_ewma_series(t_list, ranges[1], ranges[4], HALF_LIFE)
+
     out: dict[str, dict] = {}
     for side in ("buy", "sell"):
         v1 = run_backtest(
             df_ohlcv,
             tau=TAU, tick=tick, proper_days=proper_days, side=side,
             fill_rate_target=FILL_RATE_TARGET, half_life=HALF_LIFE,
-            M=M, N=N, K=K, j_start=J_START,
+            M=M, N=N, K=K, j_start=J_START, ranges=ranges, ewma=ewma,
         )
         v2 = run_backtest_rolling(
             df_ohlcv,
             tau=TAU, tick=tick, proper_days=proper_days, side=side,
             fill_rate_target=FILL_RATE_TARGET, half_life=HALF_LIFE,
-            M=M, N=N, K=K, j_start=J_START,
+            M=M, N=N, K=K, j_start=J_START, ranges=ranges, ewma=ewma,
         )
-        t_list, *_ = compute_all_ranges(df_ohlcv, TAU, tick, proper_days)
         vwap = vwap_baseline(df_ohlcv, t_list[J_START:], tau=TAU, tick=tick, side=side)
         out[side] = {"v1": v1, "v2": v2, "vwap": vwap}
 
