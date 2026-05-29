@@ -13,11 +13,10 @@ import pandas as pd
 import pytest
 
 from epdf import _load_1min
-from plot_volume import _compute_stats
-from ranges import compute_all_ranges
-
 from order_mgmt.backtest import run_backtest, run_backtest_rolling
 from order_mgmt.baselines import Side, vwap_baseline
+from plot_volume import _compute_stats
+from ranges import compute_all_ranges
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLD_CSV = ROOT / "data" / "Gold" / "GCM24.csv"

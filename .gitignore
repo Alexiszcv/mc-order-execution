@@ -44,3 +44,6 @@ Desktop.ini
 
 # --- Local Claude state ---
 .claude/settings.local.json
+
+# --- Assignment data & handout (large, not ours to redistribute — CLAUDE.md) ---
+Order Management/

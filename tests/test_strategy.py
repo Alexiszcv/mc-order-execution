@@ -6,7 +6,6 @@ from collections import Counter
 
 from order_mgmt.strategy import pick_ell_star
 
-
 # Worked example from the chat / project docs:
 # 20 windows with R_U distribution {2:3, 3:4, 4:4, 5:5, 6:2, 7:1, 8:1}.
 # Survival: P(≥8)=.05, ≥7=.10, ≥6=.20, ≥5=.45, ≥4=.65, ≥3=.85, ≥2=1.00.

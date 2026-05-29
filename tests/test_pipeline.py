@@ -14,10 +14,6 @@ def _write_csv(path: Path, rows: list[tuple]) -> None:
 
 
 def test_load_market_indexed_returns_indexed_ohlcv(tmp_path: Path) -> None:
-    rows = [
-        ("2022.11.07.09:30:00", 100.0, 100.5, 99.8, 100.3, 100),
-        ("2022.11.07.09:31:00", 100.3, 101.0, 100.0, 100.7, 120),
-    ]
     # Need enough bars to clear the 90% min_fraction filter — make a "full" day
     full_day_rows = [
         (f"2022.11.07.{9 + i // 60:02d}:{i % 60:02d}:00", 100.0, 100.5, 99.8, 100.3, 100)

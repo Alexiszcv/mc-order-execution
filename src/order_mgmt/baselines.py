@@ -76,10 +76,7 @@ def vwap_baseline(
         w_typ = typ[lo:hi]
         w_vol = vol[lo:hi]
         vsum = w_vol.sum()
-        if vsum == 0:
-            vwap = float(w_typ.mean())
-        else:
-            vwap = float((w_typ * w_vol).sum() / vsum)
+        vwap = float(w_typ.mean()) if vsum == 0 else float((w_typ * w_vol).sum() / vsum)
         open_j = float(opens_series.loc[t])
         realized.append(vwap)
         benchmark.append(open_j)

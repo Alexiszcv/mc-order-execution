@@ -87,7 +87,7 @@ def compute_ranges(
 
                 t_list.append(t)
                 value_list.append(float(value))
-                ell_list.append(int(round(value / tick)))
+                ell_list.append(round(value / tick))
                 vol_list.append(float(window["volume"].sum()))
 
             t += dt_tau
@@ -167,9 +167,9 @@ def compute_all_ranges(
                 op = op_arr[lo]
 
                 t_list.append(pd.Timestamp(t_ns))
-                ell_r.append(int(round((hi_p - lo_p) / tick)))
-                ell_u.append(int(round(max(hi_p - op, 0.0) / tick)))
-                ell_d.append(int(round(max(op - lo_p, 0.0) / tick)))
+                ell_r.append(round((hi_p - lo_p) / tick))
+                ell_u.append(round(max(hi_p - op, 0.0) / tick))
+                ell_d.append(round(max(op - lo_p, 0.0) / tick))
                 vol_list.append(float(vol_arr[lo:hi].sum()))
                 op_first_list.append(float(op))
 

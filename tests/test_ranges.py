@@ -70,7 +70,7 @@ def test_range_identity_random_within_one_tick() -> None:
 
     _, ell_r, ell_u, ell_d, *_ = compute_all_ranges(df, tau=5, tick=0.01, proper_days_list=days_list)
     assert len(ell_r) > 0
-    diffs = [abs(r - (u + d)) for r, u, d in zip(ell_r, ell_u, ell_d)]
+    diffs = [abs(r - (u + d)) for r, u, d in zip(ell_r, ell_u, ell_d, strict=True)]
     assert max(diffs) <= 1, f"identity violated by {max(diffs)} ticks"
 
 

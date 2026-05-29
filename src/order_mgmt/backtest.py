@@ -26,11 +26,11 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from order_mgmt.strategy import pick_ell_star
+
 # Team modules (flat src/ layout — pythonpath = ["src"] is set in pyproject.toml).
 from ranges import compute_all_ranges
 from regime import compute_ewma_series
-
-from order_mgmt.strategy import pick_ell_star
 
 Side = Literal["buy", "sell"]
 
@@ -59,7 +59,7 @@ class BacktestResult:
 def _state(value: float, sorted_arr: list[float], n_states: int) -> int | None:
     """Replicates the regime-state assignment used in `epdf.build_epdf`."""
     L = len(sorted_arr)
-    if L < n_states:
+    if n_states > L:
         return None
     rank = bisect.bisect_left(sorted_arr, value)
     return min(rank * n_states // L + 1, n_states)

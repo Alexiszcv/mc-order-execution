@@ -56,7 +56,7 @@ def build_epdf(t_list, ell_u_list, ell_d_list, ewma_vol, ewma_range, dx_list,
     def _state(value: float, sorted_arr: list, n_states: int):
         """State in {1..n_states} from the rank of value in sorted_arr."""
         L = len(sorted_arr)
-        if L < n_states:
+        if n_states > L:
             return None
         rank = bisect.bisect_left(sorted_arr, value)
         return min(rank * n_states // L + 1, n_states)
@@ -143,5 +143,7 @@ if __name__ == "__main__":
     )
     print(f"computed {len(ell_r)} τ=5 windows")
     if ell_r:
-        mism = sum(1 for r, u, d in zip(ell_r, ell_u, ell_d) if abs(r - (u + d)) > 1)
+        mism = sum(
+            1 for r, u, d in zip(ell_r, ell_u, ell_d, strict=True) if abs(r - (u + d)) > 1
+        )
         print(f"R = R_U + R_D within ±1 tick: {len(ell_r) - mism}/{len(ell_r)}")

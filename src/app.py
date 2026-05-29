@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,15 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 
 sys.path.insert(0, str(Path(__file__).parent))
-from plot_volume import _build_figure, _compute_stats  # noqa: E402
 from epdf import _load_1min, build_epdf  # noqa: E402
-from plotting import build_histogram_figure as _build_histogram_figure  # noqa: E402
-from ranges import compute_all_ranges  # noqa: E402
-from regime import compute_ewma_series, _build_regime_figure  # noqa: E402
-
 from order_mgmt.backtest import run_backtest  # noqa: E402
 from order_mgmt.baselines import vwap_baseline  # noqa: E402
 from order_mgmt.ticks import resolve_tick  # noqa: E402
+from plot_volume import _build_figure, _compute_stats  # noqa: E402
+from plotting import build_histogram_figure as _build_histogram_figure  # noqa: E402
+from ranges import compute_all_ranges  # noqa: E402
+from regime import _build_regime_figure, compute_ewma_series  # noqa: E402
 
 EPDF_J_START = 200
 BACKTEST_FILL_RATE_TARGET = 0.6
@@ -212,7 +212,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
         vol_section = (
             '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
             'Daily traded volume</h3>'
-            f'<p style="color:#666;font-size:.9rem">Green days: traded_mins ≥ 90 % of maximum across the dataset.</p>'
+            '<p style="color:#666;font-size:.9rem">Green days: traded_mins ≥ 90 % of maximum across the dataset.</p>'
             + img(d["vol_b64"])
         )
         hist_section = (
