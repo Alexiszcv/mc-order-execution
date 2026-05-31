@@ -39,11 +39,13 @@ Select a contract, adjust the τ slider, then click **Plot**.
 ### Agent execution-value evaluation
 
 ```bash
-python scripts/run_agent_eval.py --market Gold --market Nasdaq
+python scripts/run_agent_eval.py --market Gold --market Nasdaq   # selected markets
+python scripts/run_agent_all_assets.py                           # every market, consolidated
 ```
 
-Scores the AI agent's fills (`AIAgent_*.csv`) against benchmarks and saves
-`reports/figures/agent_*.png`. See *Agentic value* below.
+Scores the AI agent's fills (`AIAgent_*.csv`) against benchmarks. The `all_assets`
+runner auto-discovers every market with an agent series and writes a cross-market
+table (`reports/agent_all_assets.csv`) + figure. See *Agentic value* below.
 
 ### End-to-end backtest demo
 
@@ -252,16 +254,38 @@ robust win is fill rate and the median; the mean is governed by the tail.
 **The winner — regime-limit + chase-cap.** Keep the limit's upside but stop out
 at a fixed `cap` ticks of adverse move (`order_mgmt.agent.slicing.fill_capped`).
 The asymmetry — uncapped upside, bounded downside — turns the mean positive while
-keeping the median and shrinking the 5th-percentile tail:
+keeping the median and shrinking the 5th-percentile tail.
 
-| Market | Scheme | Mean (ticks) | Median | p5 (tail) |
-|--------|--------|--------------|--------|-----------|
-| Gold   | regime limit (uncapped) | +0.01 | +4 | −21 |
-| Gold   | regime limit + **cap 4** | **+0.99** | +3 | −4 |
-| Nasdaq | regime limit + **cap 4** | **+2.97** | +5 | −4 |
+### All assets (genericity)
 
-(τ=5, half_life=20, M=N=K=3, j_start=200, fill_rate_target=0.6.) The best cap is
-market-dependent — the dashboard's **Agent value** tab sweeps it live.
+`python scripts/run_agent_all_assets.py` runs the eval on every market with an
+`AIAgent_*.csv` (τ=5, half_life=20, M=N=K=3, j_start=200, fill_rate_target=0.6).
+Shortfall in ticks vs the OHLC open; *median* is the honest headline.
+
+| Market | tick | n | Fill | Regime mean / median | Best cap | Capped mean / median / p5 |
+|--------|------|---|------|----------------------|----------|---------------------------|
+| Nasdaq    | 0.25  | 1568 | 89% | −1.33 / +5 | 4  | **+2.97** / +5 / −4 |
+| Gold      | 0.10  | 948  | 76% | +0.01 / +4 | 4  | **+0.99** / +3 / −4 |
+| JPY       | 0.005 | 621  | 69% | +0.08 / +2 | 4  | +0.14 / +1 / −4 |
+| GBP       | 0.01  | 369  | 72% | +0.07 / +2 | 16 | −0.05 / +1 / −7 |
+| EuroStoxx | 0.50  | 154  | 78% | +0.11 / +3 | 16 | +0.21 / +3 / −16 |
+| Bunds     | 0.01  | 52   | 79% | +0.35 / +1 | 10 | +0.29 / +1 / −4 |
+| HeatingOil| 0.01  | 13   | — | *low-N (excluded)* | — | — |
+
+**Reading it.** Every market shows a positive *median* — the regime limit reliably
+beats market-on-decision on the typical fill. The **chase-cap's big win is on the
+liquid, high-volume markets** (Nasdaq +2.97t, Gold +0.99t mean); on the FX pairs and
+EuroStoxx the uncapped mean is already ≈ 0 and a tight cap barely helps (best cap is
+large), so the cap is a tail-insurance lever, not a free lunch. **HeatingOil is
+excluded** — its agent series outruns the OHLC coverage (only 13 fillable decisions),
+so its numbers are not statistically reliable. The best cap is market-dependent — the
+dashboard's **Agent value** tab sweeps it live. (Cross-asset figure:
+`reports/figures/agent_all_assets.png`; table: `reports/agent_all_assets.csv`.)
+
+> Tick sizes are in the CSVs' quoting units (`order_mgmt.ticks.TICK_TABLE`): GBP/JPY/
+> HeatingOil/EuroStoxx are quoted at a scaled representation, so the data-unit tick
+> (e.g. GBP 0.01, JPY 0.005) — not the raw exchange tick — is what makes ℓ a true
+> count of spreads.
 
 ### Strategy levers (Stream D)
 

@@ -252,3 +252,34 @@ single time-ordered train/eval split (`train_end`) is the seam it will plug into
   (we have no order book to price impact).
 - **Opening position:** the first AIAgent row has no prior `dpos`, so the opening
   inventory is treated as pre-existing, not a trade.
+
+## All assets (genericity check)
+
+`python scripts/run_agent_all_assets.py` runs the eval on every market with an
+`AIAgent_*.csv` (τ=5, half_life=20, M=N=K=3, j_start=200, fill_rate_target=0.6).
+Writes `reports/agent_all_assets.csv` + `reports/figures/agent_all_assets.png`.
+
+| Market | tick | n | Fill | Regime mean / median | Best cap | Capped mean / median / p5 | vs VWAP |
+|--------|------|---|------|----------------------|----------|---------------------------|---------|
+| Nasdaq    | 0.25  | 1568 | 89% | −1.33 / +5 | 4  | +2.97 / +5 / −4 | +0.18 |
+| Gold      | 0.10  | 948  | 76% | +0.01 / +4 | 4  | +0.99 / +3 / −4 | −0.29 |
+| JPY       | 0.005 | 621  | 69% | +0.08 / +2 | 4  | +0.14 / +1 / −4 | +0.01 |
+| GBP       | 0.01  | 369  | 72% | +0.07 / +2 | 16 | −0.05 / +1 / −7 | +0.19 |
+| EuroStoxx | 0.50  | 154  | 78% | +0.11 / +3 | 16 | +0.21 / +3 / −16 | +0.59 |
+| Bunds     | 0.01  | 52   | 79% | +0.35 / +1 | 10 | +0.29 / +1 / −4 | −0.01 |
+| HeatingOil| 0.01  | 13   | 69% | *low-N (excluded)* | 4 | +9.15 / +7 / −4 | — |
+
+**Findings.**
+1. **Positive median everywhere** — the regime limit reliably beats market-on-decision on
+   the typical fill across all six well-covered assets (+1 to +5 ticks).
+2. **The chase-cap's mean win concentrates on the liquid markets** (Nasdaq +2.97, Gold
+   +0.99). On FX (GBP/JPY) and EuroStoxx the uncapped mean is already ≈ 0, the best cap is
+   large (16), and a tight cap can even hurt the mean (GBP cap-16 −0.05) — there the cap is
+   tail insurance, not edge.
+3. **HeatingOil excluded:** its agent series (to 2022-06-30) outruns the liquidity-filtered
+   OHLC (ends 2022-05-31) and rolls across 7 thin contracts, leaving only 13 fillable
+   decisions — not statistically reliable.
+4. **Tick scale mattered:** GBP/JPY/HeatingOil were initially pathological (median 200 /
+   10000 / 2100 ticks) because `resolve_tick` returned the raw exchange tick while the CSVs
+   quote those markets at a scaled representation. Fixed by storing the data-unit tick in
+   `TICK_TABLE` (GBP 0.01, JPY 0.005, HO 0.01, VG 0.5); see commit `fix(ticks)`.
