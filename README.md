@@ -1,5 +1,7 @@
 # mc-order-execution
 
+Jean-Luc Tchimbakala (jt3654) & Alexis Zecevic (agz2116)
+
 Volatility/volume-based order management system for futures markets.
 Empirical PDFs of intrawindow price ranges, conditioned on market regime, are used
 to optimally place limit orders and minimize slippage. It ships a no-lookahead
