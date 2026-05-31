@@ -81,3 +81,59 @@ pytest -q tests/test_strategy.py    # picker + chase-model unit tests
 2. Is the **mid-chase** fill model (work-to-mid on unfill) operationally realistic? If yes, adopt it.
 3. Tail-averse? Set an **early-chase** `trigger_ticks` and accept the lower fill.
 4. GBP (and any other tiny-tick FX) needs a Stream-B data sanity pass before its numbers count.
+
+## 3. Ablation ladder — does the 27-cell regime conditioning earn its keep? (`scripts/ablation.py`)
+
+The whole project rests on one untested premise: that conditioning ℓ* on a (volume, range, Δx)
+regime cell extracts edge. This ablation tests it by scoring a ladder of ℓ*-rules **on the same
+decision windows with the same fills** (every rung gated on the conditional cell being non-empty;
+the conditional rung is asserted to reproduce `run_backtest_rolling` exactly). 5 markets × τ ∈
+{5,10,15,30,60} × targets {0.4…0.8} × both sides. Figures: `reports/figures/ablation_{pareto,tau}_*.png`.
+
+- **conditional**   — `pick_ell_star` on the 27-cell ePDF (the current strategy)
+- **unconditional** — `pick_ell_star` on ONE global ePDF (M=N=K=1) — does *splitting* help?
+- **persistence**   — ℓ* = the previous window's realized range (a 1-lag carry, no model)
+- **random**        — ℓ* uniform in the cell's plausible band (noise floor)
+- **VWAP**          — volume-weighted execution (reference; not a limit rule)
+
+**Headline (τ=5, target=0.6, sell side; mean slippage in ticks vs open).** buy is similar.
+
+| Market | conditional | unconditional | persistence | random | VWAP |
+|---|---|---|---|---|---|
+| Gold      | **+0.184** | +0.169 | +0.126 | +0.074 | +0.043 |
+| Nasdaq    | **+0.119** | −0.065 | +0.251 | +0.180 | −0.037 |
+| Bunds     | +0.212 | **+0.215** | +0.105 | +0.063 | −0.035 |
+| EuroStoxx | **+0.287** | +0.215 | +0.164 | +0.050 | −0.017 |
+| GBP*      | +4.428 | +3.679 | +4.342 | −0.383 | +2.205 |
+
+*GBP numbers are data-quality artifacts (see caveat above) — ignore.
+(conditional/unconditional sit at near-identical fill, ~66% vs ~68% here, so their means compare
+directly; persistence ~51–59% fill and random ~10–25% are different Pareto points — read those off
+`ablation_pareto_*.png`, not this table.)
+
+**What the ladder shows — the edge is marginal, not the thesis the project assumed:**
+
+1. **Conditioning beats pooling only by a hair, and not always.** Across τ=5, conditional beats the
+   single global ePDF on ~8/10 (market,side,target) cells, but typically by **< 0.05 ticks** of mean
+   — and the sign *flips* at low targets (0.4–0.5) on Gold/EuroStoxx. Against adverse tails of −13
+   (Gold) to −50 (Nasdaq) ticks, a 0.02–0.05-tick mean gap is economically **noise**. The two Pareto
+   curves are essentially coincident.
+2. **Where it helps most is exactly where you'd expect — and even there it's small.** The largest
+   conditional-over-unconditional gap is **Nasdaq** (the most volatile market), e.g. sell@0.6 +0.119
+   vs −0.065 (≈ +0.18 ticks). Conditioning = vol-scaling ℓ*, so it bites when vol varies most. But…
+3. **…a trivial persistence rule (ℓ* = last window's range) is competitive, and on Nasdaq beats the
+   27-cell ePDF** (sell +0.251 vs +0.119). So the ePDF isn't even reliably beating a 1-lag carry-forward.
+4. **Every limit-rule clusters near mean ≈ 0**, sophisticated or not. The inter-rung spread is small
+   relative to the chase-tail noise — consistent with the structural reading that there is **no
+   directional edge** to extract; ℓ* selection only trades fill rate against tail, it doesn't add alpha.
+5. **No edge emerges at longer τ.** As τ grows the median grows and the tail explodes proportionally
+   (Nasdaq sell median +3→+32, p05 −15→−190 across τ=5→60); the conditional-vs-unconditional gap does
+   **not** widen. Longer holding periods don't rescue the conditioning.
+
+**Verdict (a finding, not a parameter choice — CLAUDE.md):** the 27-cell regime conditioning is **not
+earning its complexity**. It yields a small, inconsistent improvement over a single pooled ePDF, and a
+one-line persistence rule captures most or all of it. The honest framing for the write-up is that
+regime-conditioned passive limits are ≈ break-even vs market-at-open, dominated by the chase tail, and
+the conditioning is close to decorative — strongest (but still marginal) on the most volatile market.
+This is the evidence base for whether to invest in the deferred direction-forecasting layer (ARMA/GARCH):
+if there's any edge to chase, it's directional, not in finer magnitude-conditioning.

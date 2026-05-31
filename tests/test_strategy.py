@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections import Counter
 
+import numpy as np
 import pytest
 
 from order_mgmt.strategy import (
     chase_price,
     pick_ell_star,
     pick_ell_star_cost_aware,
+    pick_ell_star_random,
     simulate_early_chase,
 )
 
@@ -95,6 +97,41 @@ def test_cost_aware_empty_returns_zero() -> None:
     assert pick_ell_star_cost_aware(Counter(), 1.0) == 0
 
 
+# --- random picker (ablation control) -----------------------------------------
+
+
+def test_random_picker_within_support() -> None:
+    """Every draw stays in [0, max ℓ in the support] — the same band as the real picker."""
+    rng = np.random.default_rng(0)
+    max_ell = max(_EPDF.keys())
+    for _ in range(1000):
+        ell = pick_ell_star_random(_EPDF, rng)
+        assert 0 <= ell <= max_ell
+
+
+def test_random_picker_seeded_is_deterministic() -> None:
+    """Same seed → same sequence of ℓ* (reproducibility of the ablation control)."""
+    a = [pick_ell_star_random(_EPDF, np.random.default_rng(7)) for _ in range(5)]
+    b = [pick_ell_star_random(_EPDF, np.random.default_rng(7)) for _ in range(5)]
+    assert a == b
+
+
+def test_random_picker_spans_the_band() -> None:
+    """Over many draws it should actually use the range, not collapse to one value."""
+    rng = np.random.default_rng(1)
+    seen = {pick_ell_star_random(_EPDF, rng) for _ in range(2000)}
+    assert 0 in seen and max(_EPDF.keys()) in seen and len(seen) > 3
+
+
+def test_random_picker_empty_returns_zero() -> None:
+    assert pick_ell_star_random(Counter(), np.random.default_rng(0)) == 0
+
+
+def test_random_picker_degenerate_zero_support() -> None:
+    # max_ell <= 0 → only ℓ=0 is possible.
+    assert pick_ell_star_random(Counter({0: 5}), np.random.default_rng(0)) == 0
+
+
 # --- chase_price --------------------------------------------------------------
 
 
@@ -117,8 +154,13 @@ def test_chase_price_unknown_policy_raises() -> None:
 
 def test_early_chase_sell_fills_at_limit() -> None:
     price, filled = simulate_early_chase(
-        "sell", 100.0, 5, 0.1,
-        highs=[100.2, 100.6], lows=[99.9, 100.0], closes=[100.1, 100.5],
+        "sell",
+        100.0,
+        5,
+        0.1,
+        highs=[100.2, 100.6],
+        lows=[99.9, 100.0],
+        closes=[100.1, 100.5],
         trigger_ticks=3,
     )
     assert filled is True
@@ -127,8 +169,13 @@ def test_early_chase_sell_fills_at_limit() -> None:
 
 def test_early_chase_sell_bails_at_trigger() -> None:
     price, filled = simulate_early_chase(
-        "sell", 100.0, 5, 0.1,
-        highs=[100.1, 100.2], lows=[99.95, 99.6], closes=[100.0, 99.7],
+        "sell",
+        100.0,
+        5,
+        0.1,
+        highs=[100.1, 100.2],
+        lows=[99.95, 99.6],
+        closes=[100.0, 99.7],
         trigger_ticks=3,
     )
     assert filled is False
@@ -137,8 +184,13 @@ def test_early_chase_sell_bails_at_trigger() -> None:
 
 def test_early_chase_sell_falls_through_to_close() -> None:
     price, filled = simulate_early_chase(
-        "sell", 100.0, 5, 0.1,
-        highs=[100.1, 100.2], lows=[99.8, 99.85], closes=[100.0, 100.05],
+        "sell",
+        100.0,
+        5,
+        0.1,
+        highs=[100.1, 100.2],
+        lows=[99.8, 99.85],
+        closes=[100.0, 100.05],
         trigger_ticks=3,
     )
     assert filled is False
@@ -148,8 +200,13 @@ def test_early_chase_sell_falls_through_to_close() -> None:
 def test_early_chase_same_bar_tie_favors_limit() -> None:
     # One bar reaches both the limit (100.5) and the bail (99.7): limit wins the tie.
     price, filled = simulate_early_chase(
-        "sell", 100.0, 5, 0.1,
-        highs=[100.6], lows=[99.6], closes=[100.0],
+        "sell",
+        100.0,
+        5,
+        0.1,
+        highs=[100.6],
+        lows=[99.6],
+        closes=[100.0],
         trigger_ticks=3,
     )
     assert filled is True
@@ -159,8 +216,13 @@ def test_early_chase_same_bar_tie_favors_limit() -> None:
 def test_early_chase_buy_fills_at_limit() -> None:
     # Buy: open=100, ell_star=5 → limit=99.5; trigger=3 → bail=100.3.
     price, filled = simulate_early_chase(
-        "buy", 100.0, 5, 0.1,
-        highs=[100.1, 100.0], lows=[99.8, 99.4], closes=[99.9, 99.5],
+        "buy",
+        100.0,
+        5,
+        0.1,
+        highs=[100.1, 100.0],
+        lows=[99.8, 99.4],
+        closes=[99.9, 99.5],
         trigger_ticks=3,
     )
     assert filled is True
@@ -169,8 +231,13 @@ def test_early_chase_buy_fills_at_limit() -> None:
 
 def test_early_chase_buy_bails_at_trigger() -> None:
     price, filled = simulate_early_chase(
-        "buy", 100.0, 5, 0.1,
-        highs=[100.1, 100.4], lows=[99.8, 99.7], closes=[100.0, 100.3],
+        "buy",
+        100.0,
+        5,
+        0.1,
+        highs=[100.1, 100.4],
+        lows=[99.8, 99.7],
+        closes=[100.0, 100.3],
         trigger_ticks=3,
     )
     assert filled is False
@@ -180,6 +247,12 @@ def test_early_chase_buy_bails_at_trigger() -> None:
 def test_early_chase_rejects_nonpositive_trigger() -> None:
     with pytest.raises(ValueError):
         simulate_early_chase(
-            "sell", 100.0, 5, 0.1, highs=[100.0], lows=[100.0], closes=[100.0],
+            "sell",
+            100.0,
+            5,
+            0.1,
+            highs=[100.0],
+            lows=[100.0],
+            closes=[100.0],
             trigger_ticks=0,
         )

@@ -20,6 +20,8 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Literal
 
+import numpy as np
+
 Side = Literal["buy", "sell"]
 ChasePolicy = Literal["close", "mid"]
 
@@ -101,6 +103,34 @@ def pick_ell_star_cost_aware(epdf: Counter, chase_cost_ticks: float) -> int:
             best_obj = obj
             best_ell = int(ell)
     return best_ell
+
+
+def pick_ell_star_random(epdf: Counter, rng: np.random.Generator) -> int:
+    """Control picker: ℓ* drawn uniformly from ``[0, max ℓ in the support]``.
+
+    A deliberately uninformed baseline for the ablation ladder — it ignores *where* the
+    survival mass sits and just picks a tick distance somewhere in the same plausible band
+    the real picker chooses from. If the regime-conditioned `pick_ell_star` can't beat this,
+    the conditioning isn't buying anything. The upper bound is the regime's own observed
+    max range, so random and the real picker face the same support (a fair control, not a
+    strawman that always places absurdly wide limits).
+
+    Parameters
+    ----------
+    epdf : Counter mapping ℓ (int, ticks) → count of observations.
+    rng  : a seeded ``numpy.random.Generator`` (the caller owns reproducibility).
+
+    Returns
+    -------
+    int : ℓ* in ticks, uniform in ``[0, max(support)]``. Returns 0 for an empty histogram.
+    """
+    if not epdf:
+        return 0
+    max_ell = int(max(epdf.keys()))
+    if max_ell <= 0:
+        return 0
+    # randint upper bound is exclusive → +1 so max_ell itself is reachable.
+    return int(rng.integers(0, max_ell + 1))
 
 
 def chase_price(
