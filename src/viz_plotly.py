@@ -162,6 +162,117 @@ def backtest_hist_fig(strat_slip, vwap_slip, side: str, ticker: str) -> go.Figur
     return fig
 
 
+def _shortfall_stats(arr) -> tuple[float, float, float]:
+    """(mean, median, 5th-percentile) of a shortfall array in ticks; (0,0,0) if empty."""
+    a = np.asarray(arr, dtype=float)
+    a = a[~np.isnan(a)]
+    if a.size == 0:
+        return 0.0, 0.0, 0.0
+    return float(a.mean()), float(np.median(a)), float(np.percentile(a, 5))
+
+
+def agent_benchmark_fig(results: dict[str, dict[str, np.ndarray]], market: str) -> go.Figure:
+    """Benchmark ladder: mean / median / 5th-pct shortfall (ticks) per execution scheme.
+
+    `results` maps scheme name -> {"shortfall": ndarray}. Positive = beats the OHLC
+    window open (the basis-immune benchmark). Higher mean/median is better; a less
+    negative p5 means a shorter adverse tail.
+    """
+    names = [nm for nm in results if results[nm].get("shortfall") is not None]
+    names = [nm for nm in names if np.asarray(results[nm]["shortfall"]).size > 0]
+    if not names:
+        return _empty(f"{market}: no agent decisions in this regime")
+
+    means, medians, p5s = [], [], []
+    for nm in names:
+        mu, md, p5 = _shortfall_stats(results[nm]["shortfall"])
+        means.append(mu)
+        medians.append(md)
+        p5s.append(p5)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=names, y=means, name="mean", marker_color="#4f8fd6",
+                         hovertemplate="%{x}<br>mean=%{y:+.2f}t<extra></extra>"))
+    fig.add_trace(go.Bar(x=names, y=medians, name="median", marker_color="#4CAF50",
+                         hovertemplate="%{x}<br>median=%{y:+.2f}t<extra></extra>"))
+    fig.add_trace(go.Bar(x=names, y=p5s, name="5th pct (tail)", marker_color="#ED9E3B",
+                         hovertemplate="%{x}<br>p5=%{y:+.2f}t<extra></extra>"))
+    fig.add_hline(y=0, line_dash="dash", line_color="#cccccc", line_width=1)
+    fig.update_layout(
+        template=_TEMPLATE, barmode="group",
+        title=f"{market} — execution-value vs benchmarks (ticks, positive beats open)",
+        xaxis_title="scheme", yaxis_title="shortfall (ticks)",
+        margin=dict(l=50, r=20, t=50, b=40), height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+    )
+    return fig
+
+
+def agent_cap_sweep_fig(tail_results: dict[str, dict[str, np.ndarray]],
+                        caps: tuple[int, ...], market: str) -> go.Figure:
+    """Chase-cap sweep — the asymmetric 'regime-limit + chase-cap' policy.
+
+    For each cap (ticks of adverse move tolerated before stopping out) plots mean and
+    5th-pct shortfall, with the uncapped regime limit and market-on-open as references.
+    The winning cap maximises mean while keeping the p5 tail shallow.
+    """
+    cap_names = [f"cap{c}" for c in caps]
+    if not any(np.asarray(tail_results.get(nm, {}).get("shortfall", [])).size for nm in cap_names):
+        return _empty(f"{market}: no agent decisions in this regime")
+
+    cap_mean = [_shortfall_stats(tail_results[nm]["shortfall"])[0] for nm in cap_names]
+    cap_p5 = [_shortfall_stats(tail_results[nm]["shortfall"])[2] for nm in cap_names]
+    reg_mean, _reg_med, reg_p5 = _shortfall_stats(tail_results.get("regime", {}).get("shortfall", []))
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=list(caps), y=cap_mean, mode="lines+markers",
+                             name="capped — mean", line=dict(color="#4CAF50", width=2),
+                             hovertemplate="cap=%{x}t<br>mean=%{y:+.2f}t<extra></extra>"))
+    fig.add_trace(go.Scatter(x=list(caps), y=cap_p5, mode="lines+markers",
+                             name="capped — p5 tail", line=dict(color="#ED9E3B", width=2),
+                             hovertemplate="cap=%{x}t<br>p5=%{y:+.2f}t<extra></extra>"))
+    fig.add_hline(y=reg_mean, line_dash="dot", line_color="#4CAF50", opacity=0.6,
+                  annotation_text="uncapped regime mean", annotation_position="top left")
+    fig.add_hline(y=reg_p5, line_dash="dot", line_color="#ED9E3B", opacity=0.6,
+                  annotation_text="uncapped regime p5", annotation_position="bottom left")
+    fig.add_hline(y=0, line_dash="dash", line_color="#cccccc", line_width=1,
+                  annotation_text="market-on-open", annotation_position="top right")
+    fig.update_layout(
+        template=_TEMPLATE,
+        title=f"{market} — chase-cap frontier (mean & tail vs adverse-stop cap)",
+        xaxis_title="chase cap (ticks adverse before stop-out)",
+        yaxis_title="shortfall (ticks)",
+        margin=dict(l=50, r=20, t=50, b=40), height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+    )
+    return fig
+
+
+def agent_shortfall_fig(primary, baseline, primary_name: str, baseline_name: str,
+                        market: str) -> go.Figure:
+    """Overlaid shortfall histograms: a chosen policy vs a baseline (ticks vs open)."""
+    p = np.asarray(primary, dtype=float)
+    b = np.asarray(baseline, dtype=float)
+    if p.size == 0 and b.size == 0:
+        return _empty(f"{market}: no agent decisions in this regime")
+    fig = go.Figure()
+    if b.size:
+        fig.add_trace(go.Histogram(x=b, nbinsx=50, opacity=0.6,
+                                   name=baseline_name, marker_color="#ED9E3B"))
+    if p.size:
+        fig.add_trace(go.Histogram(x=p, nbinsx=50, opacity=0.6,
+                                   name=primary_name, marker_color="#4CAF50"))
+    fig.add_vline(x=0, line_dash="dash", line_color="#cccccc", line_width=1)
+    fig.update_layout(
+        template=_TEMPLATE, barmode="overlay",
+        title=f"{market} — shortfall distribution (ticks, positive beats open)",
+        xaxis_title="shortfall (ticks)", yaxis_title="count",
+        margin=dict(l=50, r=20, t=50, b=40), height=380,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+    )
+    return fig
+
+
 def _cell_grids(counts: dict[tuple[int, int, int], Counter], M: int, N: int, k: int):
     """For a fixed direction state k, return (mean_grid, count_grid) over (m rows, n cols)."""
     mean_grid = np.full((M, N), np.nan)

@@ -26,6 +26,16 @@ import viz_plotly as viz  # noqa: E402
 # Loader/scan helpers reused verbatim from the HTTP app (matches scripts/run_v1.py).
 from app import _load_source, _scan_contracts, _scan_markets  # noqa: E402
 from epdf import build_epdf  # noqa: E402
+from order_mgmt.agent.benchmarks import (  # noqa: E402
+    evaluate_agent_benchmarks,
+    evaluate_tail_strategies,
+)
+from order_mgmt.agent.loader import (  # noqa: E402
+    find_agent_csv,
+    load_agent_series,
+    load_market_for_agent,
+)
+from order_mgmt.agent.metrics import evaluate_agent_execution  # noqa: E402
 from order_mgmt.backtest import run_backtest_rolling  # noqa: E402
 from order_mgmt.baselines import vwap_baseline  # noqa: E402
 from order_mgmt.ticks import resolve_tick  # noqa: E402
@@ -35,6 +45,41 @@ from ranges import compute_all_ranges  # noqa: E402
 from regime import compute_ewma_series  # noqa: E402
 
 TAU_VALUES = [1, 5, 10, 15, 30, 60]
+AGENT_CAPS = (4, 6, 8, 10, 12, 16)  # chase-cap sweep (ticks adverse before stop-out)
+
+_AGENT_EXPLAINER = """
+**What "agent value" measures.** The AI agent decides *what* and *when* to trade; our module
+decides *how* to fill each parent order. Value-add is the agent's realised execution price
+versus a naïve benchmark, in ticks. We benchmark against the **OHLC window open**
+(market-on-decision), not the agent's own CSV price, because the agent price can sit on a
+different contract than the rolled OHLC series — that basis would otherwise masquerade as
+slippage. Positive ticks ⇒ the execution layer *beat* trading at the open.
+
+**The headline.** Posting a passive regime limit `ℓ*` (the largest offset whose per-regime
+ePDF survival ≥ the fill-rate target) earns a solid **median** improvement, but the
+*mean* is dragged to ≈ 0 by a heavy tail: when price runs away, the unfilled order chases
+and pays. **Fill-rate is the robust quantity; the mean lives or dies on the tail.**
+
+**The winner — regime-limit + chase-cap.** Keep the limit's upside but stop out at a fixed
+`cap` ticks of adverse move (the *chase-cap* sweep above). The asymmetry — uncapped upside,
+bounded downside — turns the mean **positive** while keeping the median, and shrinks the
+5th-percentile tail dramatically. The best cap is market-dependent (dial it above).
+
+**Strategy levers (Stream D)** you can compose on top of the picker:
+- **Cost-aware ℓ\\*** (`pick_ell_star_cost_aware`): instead of a fill-rate target, maximise
+  `p(ℓ)·ℓ − (1−p(ℓ))·chase_cost`. It never picks worse than market-on-open and pulls the
+  limit in as the chase cost rises.
+- **Chase-at-mid** (`chase_price(policy="mid")`): on an unfilled order, execute at the
+  window mid `(H+L)/2` instead of the close — strictly better mean *and* tail.
+- **Early-chase** (`simulate_early_chase`): bail as soon as price moves a trigger distance
+  against the limit rather than waiting for the deadline — the intrabar cousin of the cap.
+
+**Caveat (genericity, not over-fitting).** A regime-conditioning ablation found the 27-cell
+edge over a single pooled ePDF is only ~0.02–0.05 ticks of mean — the chase-cap, not the
+conditioning, is doing the heavy lifting. The split here is a single time-ordered hold-out
+(regime fit on pre-trade history, evaluated on the trade window); a full in/out-of-sample
+parameter leaderboard is the natural next step.
+"""
 
 st.set_page_config(page_title="Futures Execution Explorer", layout="wide")
 
@@ -121,11 +166,70 @@ def run_sweep(source: str, tau: int, half_life: int, M: int, N: int, K: int,
     return out
 
 
+# --- Agent execution-value layer (AIAgent_*.csv vs OHLC) -------------------
+@st.cache_data(show_spinner=False)
+def load_agent_market(market_name: str):
+    """(agent_series, df_ohlcv, tick, proper_days) for a market shipping an AIAgent CSV.
+
+    Roll-aware OHLC + spec tick via load_market_for_agent — identical wiring to
+    scripts/run_v1.py. Returns None if no AIAgent file or no usable OHLC.
+    """
+    market_dir = DATA / market_name
+    csv = find_agent_csv(market_dir)
+    if csv is None:
+        return None
+    agent = load_agent_series(csv, market_name)
+    df_ohlcv, tick, proper_days, _stem = load_market_for_agent(market_dir)
+    if df_ohlcv.empty:
+        return None
+    return agent, df_ohlcv, tick, proper_days
+
+
+@st.cache_data(show_spinner=False)
+def run_agent_eval(market_name: str, tau: int, half_life: int, M: int, N: int, K: int,
+                   j_start: int, fill_target: float):
+    loaded = load_agent_market(market_name)
+    if loaded is None:
+        return None
+    agent, df_ohlcv, tick, proper_days = loaded
+    return evaluate_agent_execution(
+        agent, df_ohlcv, tick, proper_days, tau=tau, half_life=half_life,
+        M=M, N=N, K=K, fill_rate_target=fill_target, j_start=j_start,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def run_agent_benchmarks(market_name: str, tau: int, half_life: int, M: int, N: int, K: int,
+                         j_start: int, fill_target: float):
+    loaded = load_agent_market(market_name)
+    if loaded is None:
+        return None
+    agent, df_ohlcv, tick, proper_days = loaded
+    return evaluate_agent_benchmarks(
+        agent, df_ohlcv, tick, proper_days, tau=tau, half_life=half_life,
+        M=M, N=N, K=K, fill_rate_target=fill_target, j_start=j_start, seed=0,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def run_agent_caps(market_name: str, tau: int, half_life: int, M: int, N: int, K: int,
+                   j_start: int, fill_target: float):
+    loaded = load_agent_market(market_name)
+    if loaded is None:
+        return None
+    agent, df_ohlcv, tick, proper_days = loaded
+    return evaluate_tail_strategies(
+        agent, df_ohlcv, tick, proper_days, tau=tau, half_life=half_life,
+        M=M, N=N, K=K, fill_rate_target=fill_target, j_start=j_start, caps=AGENT_CAPS,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sidebar controls
 # ---------------------------------------------------------------------------
 markets = _scan_markets()
 contracts = _scan_contracts()
+agent_markets = {p.name: p for p in markets if find_agent_csv(p) is not None}
 
 source_options = (
     [f"m:{p.name}" for p in markets]
@@ -160,6 +264,9 @@ with st.sidebar:
     side_choice = st.radio("Side", ["Buy", "Sell", "Both"], index=2, horizontal=True)
     auto_bt = st.checkbox("Run backtest", value=True,
                           help="Uncheck for faster regime tuning (skips the heavy backtest).")
+    agent_on = st.checkbox("Agent execution-value", value=False,
+                           help="Score the AI agent's fills vs benchmarks on its AIAgent_*.csv "
+                                "(heavier; uses the regime/strategy knobs above).")
 
     with st.expander("Fill-target sweep (Pareto)"):
         st.caption("Runs one backtest per grid point per side — heavier.")
@@ -226,8 +333,8 @@ if auto_bt:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_dq, tab_rng, tab_reg, tab_epdf, tab_bt, tab_sweep = st.tabs(
-    ["Data Quality", "Ranges", "Regimes", "ePDFs", "Backtest", "Sweep"]
+tab_dq, tab_rng, tab_reg, tab_epdf, tab_bt, tab_sweep, tab_agent = st.tabs(
+    ["Data Quality", "Ranges", "Regimes", "ePDFs", "Backtest", "Sweep", "Agent value"]
 )
 
 with tab_dq:
@@ -333,3 +440,64 @@ with tab_sweep:
                             use_container_width=True)
             prog.progress((i + 1) / total)
         prog.empty()
+
+with tab_agent:
+    st.caption(
+        "Does regime-conditioned execution add value to the **AI agent's** trading? The "
+        "agent's parent orders are the rows of its AIAgent_*.csv where its signed position "
+        "changes. We fill each on the OHLC data using the regime ℓ* picker, and benchmark "
+        "against the **OHLC window open** (basis-immune — positive ticks beat market-on-decision)."
+    )
+    if not agent_markets:
+        st.info("No AIAgent_*.csv found under the data folder.")
+    elif not agent_on:
+        st.info("Enable **Agent execution-value** in the sidebar to run this analysis "
+                "(it reuses the τ / half-life / M / N / K / fill-rate knobs).")
+    else:
+        names = list(agent_markets)
+        default_idx = names.index(source[2:]) if source.startswith("m:") and source[2:] in agent_markets else 0
+        a_market = st.selectbox("Agent market", names, index=default_idx)
+
+        with st.spinner(f"Evaluating {a_market} agent execution (regime fit on pre-trade history)…"):
+            res = run_agent_eval(a_market, tau, half_life, n_vol, n_range, k_dx, j_start, fill_target)
+            bmk = run_agent_benchmarks(a_market, tau, half_life, n_vol, n_range, k_dx, j_start, fill_target)
+            caps = run_agent_caps(a_market, tau, half_life, n_vol, n_range, k_dx, j_start, fill_target)
+
+        if res is None or res.n_decisions == 0:
+            st.warning("No fillable agent decisions for this market/regime — try a lower j_start.")
+        else:
+            a = st.columns(6)
+            a[0].metric("Decisions", f"{res.n_decisions:,}")
+            a[1].metric("Fill-rate", f"{res.fill_rate:.1%}")
+            a[2].metric("Mean shortfall", f"{res.mean_shortfall_ticks:+.2f}t")
+            a[3].metric("Median shortfall", f"{res.median_shortfall_ticks:+.2f}t")
+            a[4].metric("Value vs market", f"{res.value_add_vs_market_ticks:+.2f}t")
+            a[5].metric("Value vs VWAP", f"{res.value_add_vs_vwap_ticks:+.2f}t")
+
+            if bmk is not None:
+                st.markdown("**Benchmark ladder** — static ℓ* schemes on identical orders.")
+                st.plotly_chart(viz.agent_benchmark_fig(bmk, a_market), use_container_width=True)
+
+            if caps is not None and any(caps[f"cap{c}"]["shortfall"].size for c in AGENT_CAPS):
+                cap_means = {
+                    c: (float(np.mean(caps[f"cap{c}"]["shortfall"]))
+                        if caps[f"cap{c}"]["shortfall"].size else -np.inf)
+                    for c in AGENT_CAPS
+                }
+                best_cap = max(cap_means, key=cap_means.get)
+                st.markdown(
+                    f"**Chase-cap frontier** — the winning *regime-limit + chase-cap* policy. "
+                    f"Best cap by mean here: **{best_cap} ticks**."
+                )
+                st.plotly_chart(viz.agent_cap_sweep_fig(caps, AGENT_CAPS, a_market),
+                                use_container_width=True)
+                st.plotly_chart(
+                    viz.agent_shortfall_fig(
+                        caps[f"cap{best_cap}"]["shortfall"], caps["regime"]["shortfall"],
+                        f"regime-limit + cap{best_cap}", "regime-limit (uncapped)", a_market,
+                    ),
+                    use_container_width=True,
+                )
+
+            with st.expander("What this means — agentic value & the strategy levers", expanded=True):
+                st.markdown(_AGENT_EXPLAINER)
