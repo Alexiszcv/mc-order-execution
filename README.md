@@ -17,14 +17,33 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Interactive viewer
+### Interactive dashboard (recommended)
 
 ```bash
-python src/app.py
+streamlit run src/streamlit_app.py     # → http://localhost:8501
 ```
 
-Open `http://localhost:8000` in your browser. Select a contract from the
-dropdown, adjust the τ slider, then click **Plot**.
+A Plotly dashboard with tabs for data quality, ranges, regimes, ePDFs, the
+no-lookahead backtest, a fill-target Pareto sweep, and an **Agent value** tab
+(see *Agentic value* below). All parameters (τ, half-life, M/N/K, j_start,
+fill-rate target) are live sidebar sliders — the parameter-tuning surface.
+
+### Legacy viewer
+
+```bash
+python src/app.py                      # → http://localhost:8000
+```
+
+Select a contract, adjust the τ slider, then click **Plot**.
+
+### Agent execution-value evaluation
+
+```bash
+python scripts/run_agent_eval.py --market Gold --market Nasdaq
+```
+
+Scores the AI agent's fills (`AIAgent_*.csv`) against benchmarks and saves
+`reports/figures/agent_*.png`. See *Agentic value* below.
 
 ### End-to-end backtest demo
 
@@ -200,12 +219,86 @@ granularity, or adopting a smarter chase policy are the obvious levers.
 
 ---
 
+## Agentic value (AI agent execution)
+
+Each market ships an `AIAgent_*.csv` — a 5-minute decision series for an "AI
+agent" (schema `excel_serial_day, hour, minute, price, signed_position`). The
+agent decides *what* and *when* to trade; this module decides *how* to fill each
+parent order. **Agent value** = how much regime-conditioned execution improves
+the agent's realised price versus a naïve benchmark, in ticks
+(`src/order_mgmt/agent/`).
+
+**Parent orders & direction.** The agent's trades are the rows where its *signed
+position changes*: `dpos = position.diff()`, `dpos > 0` → buy, `< 0` → sell.
+Direction comes from the agent's own action, so it is causal — no lookahead.
+
+**Benchmark = the OHLC window open, not the agent's CSV price.** The agent price
+can sit on a different (unrolled) contract than our rolled OHLC series; that
+basis would otherwise masquerade as slippage (it produced a spurious Gold tail
+until we switched the benchmark). Positive ticks therefore mean the execution
+layer *beat* market-on-decision.
+
+**No-lookahead split.** The regime ePDFs/thresholds are fit only on OHLC windows
+*before* the agent's first trade (`train_end`); every decision is then evaluated
+out-of-sample. This is a single time-ordered hold-out — a full in/out-of-sample
+parameter leaderboard is the natural next step.
+
+### The headline result
+
+Posting a passive regime limit `ℓ*` earns a strong **median** improvement but a
+**mean near zero** — the same chase-on-unfill tail as the main backtest. The
+robust win is fill rate and the median; the mean is governed by the tail.
+
+**The winner — regime-limit + chase-cap.** Keep the limit's upside but stop out
+at a fixed `cap` ticks of adverse move (`order_mgmt.agent.slicing.fill_capped`).
+The asymmetry — uncapped upside, bounded downside — turns the mean positive while
+keeping the median and shrinking the 5th-percentile tail:
+
+| Market | Scheme | Mean (ticks) | Median | p5 (tail) |
+|--------|--------|--------------|--------|-----------|
+| Gold   | regime limit (uncapped) | +0.01 | +4 | −21 |
+| Gold   | regime limit + **cap 4** | **+0.99** | +3 | −4 |
+| Nasdaq | regime limit + **cap 4** | **+2.97** | +5 | −4 |
+
+(τ=5, half_life=20, M=N=K=3, j_start=200, fill_rate_target=0.6.) The best cap is
+market-dependent — the dashboard's **Agent value** tab sweeps it live.
+
+### Strategy levers (Stream D)
+
+Composable refinements on top of the picker, surfaced as options (the final
+parameter choice is the user's):
+
+- **Cost-aware ℓ\*** (`pick_ell_star_cost_aware`) — maximise
+  `p(ℓ)·ℓ − (1−p(ℓ))·chase_cost` instead of targeting a fill rate; never picks
+  worse than market-on-open.
+- **Chase-at-mid** (`chase_price(policy="mid")`) — fill unfilled orders at the
+  window mid `(H+L)/2` rather than the close; strictly better mean *and* tail.
+- **Early-chase** (`simulate_early_chase`) — bail when price moves a trigger
+  distance against the limit instead of waiting for the deadline (the intrabar
+  cousin of the chase-cap).
+
+### Genericity, not over-fitting
+
+A regime-conditioning ablation (`scripts/sweep_chase.py`, `notes/strategy-sweep.md`)
+found the 27-cell edge over a single *pooled* ePDF is only ~0.02–0.05 ticks of
+mean — the chase-cap, not the conditioning, is doing the heavy lifting. The
+pipeline is generic across all provided markets (`scripts/run_agent_eval.py`
+accepts any `--market`), and a `synthetic` agent generator
+(`order_mgmt.agent.synthetic`) provides a zero-shot genericity check.
+
+Full findings: `notes/agent-value.md` (execution value) and
+`notes/strategy-sweep.md` (Stream D sweep + ablation).
+
+---
+
 ## Project layout
 
 ```
 src/
-  app.py              Web viewer (port 8000) — volume, range histograms,
-                      regime indicators, conditional ePDFs, backtest panel
+  streamlit_app.py    Plotly dashboard (port 8501) — data quality, ranges,
+                      regimes, ePDFs, backtest, sweep, Agent value tab
+  viz_plotly.py       Plotly figure builders for the dashboard
+  app.py              Legacy web viewer (port 8000)
   ranges.py           τ-window range computation (compute_ranges, compute_all_ranges)
   epdf.py             Conditional ePDF builder (build_epdf) + raw CSV loader
   plotting.py         Range histogram figure
@@ -215,11 +308,20 @@ src/
     loader.py         Contract-roll-aware market loader (load_market, MarketSpec)
     pipeline.py       Bridges load_market into the indexed-by-time format
     ticks.py          Per-market spec tick-size table + resolver
-    strategy.py       pick_ell_star (limit-distance from ePDF + fill target)
+    strategy.py       pick_ell_star + cost-aware/random pickers, chase_price,
+                      simulate_early_chase (Stream D)
     baselines.py      TWAP / VWAP baselines
     backtest.py       run_backtest (v1) + run_backtest_rolling (v2, no-lookahead)
+    mc/               Monte Carlo execution layer (Stream F)
+    agent/            AI-agent execution value (Stream G): loader, metrics,
+                      benchmarks, slicing (fill_capped), dynamic (DP), synthetic
 
-tests/                pytest — math primitives, strategy, ticks, pipeline, loader
-scripts/run_v1.py     End-to-end demo: Gold + Nasdaq, v1 vs v2 vs VWAP
-reports/figures/      Backtest figures (slippage histograms per market)
+tests/                pytest — math primitives, strategy, ticks, pipeline, loader,
+                      MC, agent
+scripts/
+  run_v1.py           End-to-end backtest demo: Gold + Nasdaq, v1 vs v2 vs VWAP
+  run_agent_eval.py   Agent execution-value eval per market
+  sweep_*.py          Fill-rate Pareto + chase-policy sweeps (Stream D)
+  compare_*.py        Agent benchmark / slicing / dynamic / tail-cap comparisons
+reports/figures/      Backtest + agent + sweep figures
 ```
