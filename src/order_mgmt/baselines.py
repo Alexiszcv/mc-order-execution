@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 Side = Literal["buy", "sell"]
@@ -42,26 +43,38 @@ def vwap_baseline(
     """VWAP per window using bar-typical-price weighted by bar-volume.
 
     Bar typical price = (high + low + close) / 3.
-    Slippage = (vwap − open) / tick for sell, (open − vwap) / tick for buy.
+    Slippage = (vwap - open) / tick for sell, (open - vwap) / tick for buy.
+
+    Each window [t, t+τ) is a contiguous slice of the (sorted) 1-min index, so
+    window bounds come from `searchsorted` (O(log n)) rather than a full boolean
+    mask per window (O(n)). Output is identical to the masked version.
     """
     realized: list[float] = []
     benchmark: list[float] = []
     slippage: list[float] = []
 
     dt_tau = pd.Timedelta(minutes=tau)
-    opens_series = df_1min["open"]
+    if not df_1min.index.is_monotonic_increasing:
+        df_1min = df_1min.sort_index()
+
+    # Precompute typical price, volume and open as numpy arrays once.
+    idx = df_1min.index.values  # sorted datetime64[ns]
+    typ_all = ((df_1min["high"] + df_1min["low"] + df_1min["close"]) / 3.0).to_numpy()
+    vol_all = df_1min["volume"].to_numpy()
+    open_all = df_1min["open"].to_numpy()
+    dt_tau_ns = np.timedelta64(dt_tau)
 
     for t in t_list:
-        window = df_1min.loc[(df_1min.index >= t) & (df_1min.index < t + dt_tau)]
-        if window.empty:
+        t64 = np.datetime64(t)
+        lo = int(np.searchsorted(idx, t64, side="left"))
+        hi = int(np.searchsorted(idx, t64 + dt_tau_ns, side="left"))
+        if hi <= lo:
             continue
-        typ = (window["high"] + window["low"] + window["close"]) / 3.0
-        v = window["volume"]
-        if v.sum() == 0:
-            vwap = float(typ.mean())
-        else:
-            vwap = float((typ * v).sum() / v.sum())
-        open_j = float(opens_series.loc[t])
+        typ = typ_all[lo:hi]
+        v = vol_all[lo:hi]
+        vsum = v.sum()
+        vwap = float(typ.mean()) if vsum == 0 else float((typ * v).sum() / vsum)
+        open_j = float(open_all[lo])  # idx[lo] == t (window start is an actual bar)
         realized.append(vwap)
         benchmark.append(open_j)
         if side == "sell":
