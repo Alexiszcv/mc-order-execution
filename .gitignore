@@ -1,29 +1,50 @@
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- Virtualenvs ---
 .venv/
 venv/
 env/
 .env
-*.egg-info/
-dist/
-build/
+.python-version
 
-# Jupyter
+# --- Tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Jupyter ---
 .ipynb_checkpoints/
-*.ipynb
+*.ipynb_meta
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# IDEs
-.idea/
+# --- IDE / editor ---
 .vscode/
+.idea/
 *.swp
 *.swo
 
-# Streamlit
+# --- OS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# --- Streamlit (if used) ---
 .streamlit/secrets.toml
+
+# --- Project data (large, not ours to redistribute) ---
+Order Management/
+data/
+
+# --- Local Claude state ---
+.claude/settings.local.json

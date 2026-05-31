@@ -1,0 +1,46 @@
+{
+  "//": "Disabled hook examples preserved here so Claude Code doesn't load them. To enable one, copy its entry into the `hooks` block of settings.json (and drop the `//example-` prefix from this file's keys if you copy the whole block).",
+
+  "//example-PostToolUse-pytest": "Run pytest for the touched module when a test file is edited.",
+  "PostToolUse-pytest": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$f = $env:CLAUDE_TOOL_INPUT_file_path; if ($f -match 'test_.*\\.py$|.*_test\\.py$' -and (Get-Command pytest -ErrorAction SilentlyContinue)) { pytest -q $f 2>&1 | Select-Object -Last 30 }\""
+          }
+        ]
+      }
+    ]
+  },
+
+  "//example-UserPromptSubmit-git": "Inject git status into every prompt.",
+  "UserPromptSubmit-git": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"if (Test-Path .git) { Write-Output '<git>'; git status --short; Write-Output '---'; git log --oneline -5; Write-Output '</git>' }\""
+          }
+        ]
+      }
+    ]
+  },
+
+  "//example-Stop-notify": "Toast notification when Claude finishes a turn.",
+  "Stop-notify": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Claude finished', 'Claude Code') | Out-Null\""
+          }
+        ]
+      }
+    ]
+  }
+}

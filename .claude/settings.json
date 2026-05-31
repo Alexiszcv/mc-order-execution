@@ -1,0 +1,59 @@
+{
+  "//": "Project-level Claude Code settings. Comments use the '//' key convention (settings.json tolerates string-valued '//' keys at the top level — but NOT inside the `hooks` block, where unknown keys are rejected).",
+
+  "permissions": {
+    "//": "Pre-approved commands so Claude doesn't ask each time. Narrow on purpose — broaden via /fewer-permission-prompts after a few sessions of friction.",
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -m pip:*)",
+      "Bash(python -m venv:*)",
+      "Bash(ruff:*)",
+      "Bash(uv:*)",
+      "Bash(jupyter:*)",
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "PowerShell(Get-Command:*)",
+      "PowerShell(Test-Path:*)",
+      "PowerShell(Get-ChildItem:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git checkout --:*)"
+    ]
+  },
+
+  "//hooks": "Hooks run shell commands the harness enforces — Claude can't forget them. These are Windows-PowerShell friendly and gracefully no-op if the tool isn't installed yet (e.g. before `uv sync`).",
+  "//hooks-ruff": "PostToolUse ruff: lint Python files after every Edit/Write. Skips non-.py files and no-ops if ruff isn't on PATH yet.",
+  "//hooks-examples": "Disabled hook examples (pytest-on-edit, UserPromptSubmit git status, Stop toast) live in .claude/settings.examples.json. Copy an entry back into `hooks` to enable.",
+
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$f = $env:CLAUDE_TOOL_INPUT_file_path; if ($f -match '\\.py$' -and (Get-Command ruff -ErrorAction SilentlyContinue)) { ruff check $f 2>&1 | Select-Object -Last 20 }\""
+          }
+        ]
+      }
+    ]
+  },
+
+  "//env": "Project-specific env vars Claude should see (e.g. data paths, seeds). Empty for now.",
+  "env": {}
+}

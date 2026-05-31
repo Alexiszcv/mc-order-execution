@@ -1,0 +1,52 @@
+[project]
+name = "order-management"
+version = "0.1.0"
+description = "Volatility-Volume-based Order Management (Columbia IEOR4703 Term Project 2, Hirsa)."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "streamlit>=1.40",
+    "plotly>=5.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["*.ipynb"]  # notebooks are scratch (CLAUDE.md); don't lint cell style
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",                      # line-length handled by formatter
+    "RUF001", "RUF002", "RUF003",  # intentional math notation in code/docstrings/comments (σ, τ, ℓ, √, ≥, →)
+    "N803", "N806",              # uppercase M/N/K and R_U/R_D match the assignment spec's notation
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Spec-mandated regime names (M, N, K, R_U, R_D) intentionally violate snake_case.
+"tests/**" = ["N802", "N803", "N806"]
+"src/viz_plotly.py" = ["N803", "N806", "N816"]
+"src/streamlit_app.py" = ["N803", "N806", "N816"]

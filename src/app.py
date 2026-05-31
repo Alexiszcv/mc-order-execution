@@ -11,22 +11,127 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 
 sys.path.insert(0, str(Path(__file__).parent))
+from epdf import _load_1min, build_epdf  # noqa: E402
+from order_mgmt.backtest import run_backtest_rolling  # noqa: E402
+from order_mgmt.baselines import vwap_baseline  # noqa: E402
+from order_mgmt.pipeline import load_market_indexed  # noqa: E402
+from order_mgmt.ticks import resolve_tick  # noqa: E402
 from plot_volume import _build_figure, _compute_stats  # noqa: E402
-from epdf import _load_1min, compute_all_ranges, _build_histogram_figure  # noqa: E402
-from regime import compute_ewma_series, _build_regime_figure  # noqa: E402
+from plotting import build_histogram_figure as _build_histogram_figure  # noqa: E402
+from ranges import compute_all_ranges  # noqa: E402
+from regime import _build_regime_figure, compute_ewma_series  # noqa: E402
+
+EPDF_J_START = 200
+
+
+def _build_backtest_figure(
+    strat_buy_slip, vwap_buy_slip, strat_sell_slip, vwap_sell_slip, ticker: str
+):
+    """1x2 slippage histograms (buy / sell) — strategy (v2, no-lookahead) vs VWAP."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+    panels = [
+        (axes[0], "buy", strat_buy_slip, vwap_buy_slip),
+        (axes[1], "sell", strat_sell_slip, vwap_sell_slip),
+    ]
+    for ax, side, strat, vwap in panels:
+        if strat:
+            ax.hist(strat, bins=40, alpha=0.6, label="Strategy (v2)", color="seagreen")
+        if vwap:
+            ax.hist(vwap, bins=40, alpha=0.6, label="VWAP", color="orange")
+        ax.axvline(0, color="black", linestyle="--", linewidth=0.6)
+        ax.set_title(f"{ticker} — {side} (slippage vs open)")
+        ax.set_xlabel("ticks")
+        ax.set_ylabel("count")
+        ax.legend()
+    plt.tight_layout()
+    return fig
+
+
+def _build_epdf_summary(counts_RU, counts_RD, M: int, N: int, K: int) -> str:
+    """One-row-per-cell HTML table of regime → (n_obs, mean R_U ticks, mean R_D ticks)."""
+    rows = []
+    rows.append(
+        "<tr><th>(m,n,k)</th><th>n</th><th>mean R<sub>U</sub></th>"
+        "<th>mean R<sub>D</sub></th></tr>"
+    )
+    for m in range(1, M + 1):
+        for n_st in range(1, N + 1):
+            for k in range(1, K + 1):
+                ru = counts_RU.get((m, n_st, k))
+                rd = counts_RD.get((m, n_st, k))
+                if not ru:
+                    continue
+                n_obs = sum(ru.values())
+                mean_ru = sum(ell * c for ell, c in ru.items()) / n_obs
+                mean_rd = (
+                    sum(ell * c for ell, c in rd.items()) / sum(rd.values()) if rd else 0.0
+                )
+                rows.append(
+                    f"<tr><td>({m},{n_st},{k})</td>"
+                    f"<td style='text-align:right'>{n_obs}</td>"
+                    f"<td style='text-align:right'>{mean_ru:.2f}</td>"
+                    f"<td style='text-align:right'>{mean_rd:.2f}</td></tr>"
+                )
+    if len(rows) == 1:
+        return "<p style='color:#666'>No populated regime cells (try lowering j_start or fewer states).</p>"
+    return (
+        "<table style='border-collapse:collapse;font-size:.85rem'>"
+        + "".join(rows)
+        + "</table>"
+    )
 
 
 def _scan_contracts():
     return sorted(
         p for p in DATA.rglob("*.csv") if not p.stem.startswith("AIAgent")
     )
+
+
+def _scan_markets():
+    """Market directories holding at least one non-AIAgent contract CSV."""
+    if not DATA.exists():
+        return []
+    return sorted(
+        p for p in DATA.iterdir()
+        if p.is_dir() and any(
+            f.suffix == ".csv" and not f.stem.startswith("AIAgent")
+            for f in p.iterdir()
+        )
+    )
+
+
+def _load_source(source: str):
+    """Resolve a dropdown value to (df_ohlcv, ticker, first_stem).
+
+    'm:<market>' → roll-aware multi-contract series (matches scripts/run_v1.py);
+    'c:<stem>'   → single-contract CSV. Returns None if unresolved/empty.
+    """
+    kind, _, name = source.partition(":")
+    if kind == "m":
+        market_dir = DATA / name
+        if not market_dir.is_dir():
+            return None
+        df = load_market_indexed(market_dir)
+        if df.empty:
+            return None
+        contracts_used = df["contract"].unique().tolist()
+        df_ohlcv = df[["open", "high", "low", "close", "volume"]]
+        ticker = f"{name} (rolled: {len(contracts_used)} contracts)"
+        return df_ohlcv, ticker, contracts_used[0]
+    # single contract
+    match = next((p for p in _scan_contracts() if p.stem == name), None)
+    if match is None:
+        return None
+    return _load_1min(str(match)), name, name
 
 
 def _fig_to_b64(fig) -> str:
@@ -36,10 +141,13 @@ def _fig_to_b64(fig) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _render(csv_path: Path, tau: int, half_life: int,
-            n_states_range: int, n_states_vol: int, k_states_dx: int) -> dict:
-    ticker  = csv_path.stem
-    df_1min = _load_1min(str(csv_path))                          # single CSV read
+def _render(source: str, tau: int, half_life: int,
+            n_states_range: int, n_states_vol: int, k_states_dx: int,
+            fill_rate_target: float) -> dict | None:
+    loaded = _load_source(source)
+    if loaded is None:
+        return None
+    df_1min, ticker, first_stem = loaded
 
     daily, tick, proper_days, n_green, n_total = _compute_stats(df_1min)
     max_traded = int(daily["traded_mins"].max())
@@ -57,29 +165,77 @@ def _render(csv_path: Path, tau: int, half_life: int,
         k_states_dx=k_states_dx,
     )
 
+    counts_RU, counts_RD, _thr = build_epdf(
+        t_list, ell_u, ell_d, list(ewma_vol), list(ewma_range), dx_list,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    epdf_table = _build_epdf_summary(
+        counts_RU, counts_RD, M=n_states_vol, N=n_states_range, K=k_states_dx
+    )
+
+    # Backtest: v2 (no-lookahead) regime-conditioned strategy vs VWAP, both sides.
+    # Tick resolved from the first rolled contract stem, as scripts/run_v1.py does.
+    tick_eff = resolve_tick(first_stem, tick)
+    bt_buy = run_backtest_rolling(
+        df_1min, tau=tau, tick=tick_eff, proper_days=proper_days, side="buy",
+        fill_rate_target=fill_rate_target, half_life=half_life,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    bt_sell = run_backtest_rolling(
+        df_1min, tau=tau, tick=tick_eff, proper_days=proper_days, side="sell",
+        fill_rate_target=fill_rate_target, half_life=half_life,
+        M=n_states_vol, N=n_states_range, K=k_states_dx, j_start=EPDF_J_START,
+    )
+    vwap_buy = vwap_baseline(df_1min, t_list[EPDF_J_START:], tau=tau, tick=tick_eff, side="buy")
+    vwap_sell = vwap_baseline(df_1min, t_list[EPDF_J_START:], tau=tau, tick=tick_eff, side="sell")
+
+    fig_bt = _build_backtest_figure(
+        bt_buy.slippage_ticks, vwap_buy.slippage_ticks,
+        bt_sell.slippage_ticks, vwap_sell.slippage_ticks,
+        ticker,
+    )
+
     return dict(
         vol_b64    = _fig_to_b64(fig_vol),
         hist_b64   = _fig_to_b64(fig_hist),
         regime_b64 = _fig_to_b64(fig_regime),
+        bt_b64     = _fig_to_b64(fig_bt),
+        epdf_table = epdf_table,
         n_green    = n_green,
         n_total    = n_total,
-        tick       = tick,
+        tick       = tick_eff,
         n_windows  = len(ell_r),
+        bt_buy     = bt_buy,
+        bt_sell    = bt_sell,
+        vwap_buy_avg  = float(np.mean(vwap_buy.slippage_ticks)) if vwap_buy.slippage_ticks else 0.0,
+        vwap_sell_avg = float(np.mean(vwap_sell.slippage_ticks)) if vwap_sell.slippage_ticks else 0.0,
     )
 
 
 TAU_VALUES = [1, 5, 10, 15, 30, 60]
 HALF_LIFE_MIN, HALF_LIFE_MAX, HALF_LIFE_DEFAULT = 5, 200, 20
 STATES_MIN, STATES_MAX, STATES_DEFAULT = 2, 6, 3
+FILL_MIN_PCT, FILL_MAX_PCT, FILL_DEFAULT_PCT, FILL_STEP_PCT = 30, 90, 60, 5
 
 
-def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
+def _html(markets, contracts, selected_source="", tau=5, half_life=HALF_LIFE_DEFAULT,
           n_states_range=STATES_DEFAULT, n_states_vol=STATES_DEFAULT,
-          k_states_dx=STATES_DEFAULT, data=None):
+          k_states_dx=STATES_DEFAULT, fill_pct=FILL_DEFAULT_PCT, data=None):
+    market_opts = "\n".join(
+        f'<option value="m:{p.name}" {"selected" if f"m:{p.name}" == selected_source else ""}>'
+        f'{p.name}</option>'
+        for p in markets
+    )
     contract_opts = "\n".join(
-        f'<option value="{p.stem}" {"selected" if p.stem == selected_stem else ""}>'
+        f'<option value="c:{p.stem}" {"selected" if f"c:{p.stem}" == selected_source else ""}>'
         f'{p.stem}  ({p.parent.name})</option>'
         for p in contracts
+    )
+    source_select = (
+        '<select name="source">'
+        f'<optgroup label="Markets (roll-aware)">{market_opts}</optgroup>'
+        f'<optgroup label="Single contracts">{contract_opts}</optgroup>'
+        '</select>'
     )
 
     tau = tau if tau in TAU_VALUES else TAU_VALUES[0]
@@ -88,13 +244,14 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
     nr  = max(STATES_MIN, min(STATES_MAX, n_states_range))
     nv  = max(STATES_MIN, min(STATES_MAX, n_states_vol))
     kd  = max(STATES_MIN, min(STATES_MAX, k_states_dx))
+    fp  = max(FILL_MIN_PCT, min(FILL_MAX_PCT, fill_pct))
 
     def img(b64):
         return (f'<img src="data:image/png;base64,{b64}"'
                 f' style="max-width:100%;margin-top:20px">') if b64 else ""
 
     stats = ""
-    vol_section = hist_section = regime_section = ""
+    vol_section = hist_section = regime_section = epdf_section = backtest_section = ""
     if data:
         d = data
         stats = (
@@ -110,7 +267,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
         vol_section = (
             '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
             'Daily traded volume</h3>'
-            f'<p style="color:#666;font-size:.9rem">Green days: traded_mins ≥ 90 % of maximum across the dataset.</p>'
+            '<p style="color:#666;font-size:.9rem">Green days: traded_mins ≥ 90 % of maximum across the dataset.</p>'
             + img(d["vol_b64"])
         )
         hist_section = (
@@ -129,6 +286,29 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
             f'Δx = open[t+τ] − open[t] (in ticks). '
             f'Colour bands = quantile-based states.</p>'
             + img(d["regime_b64"])
+        )
+        epdf_section = (
+            '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
+            'Conditional ePDFs (regime → R<sub>U</sub>/R<sub>D</sub> ticks)</h3>'
+            f'<p style="color:#666;font-size:.9rem">'
+            f'Per-regime cell (m=volume, n=range, k=direction): count of windows and '
+            f'mean R<sub>U</sub>/R<sub>D</sub> in ticks. Skips j&lt;{EPDF_J_START} '
+            f'(warm-up).</p>'
+            + d["epdf_table"]
+        )
+        bb, bs = d["bt_buy"], d["bt_sell"]
+        backtest_section = (
+            '<h3 style="margin-top:32px;border-top:1px solid #ddd;padding-top:14px">'
+            'Backtest — strategy v2 (no-lookahead) vs VWAP (TWAP=open is the zero baseline)</h3>'
+            f'<p style="color:#666;font-size:.9rem">'
+            f'fill_rate_target = {fp / 100:.2f}. '
+            f'<strong>buy:</strong> n={bb.n_decisions}, fill={bb.fill_rate:.1%}, '
+            f'avg={bb.avg_slippage_ticks:+.2f}t, median={bb.median_slippage_ticks:+.2f}t '
+            f'(VWAP avg={d["vwap_buy_avg"]:+.2f}t). '
+            f'<strong>sell:</strong> n={bs.n_decisions}, fill={bs.fill_rate:.1%}, '
+            f'avg={bs.avg_slippage_ticks:+.2f}t, median={bs.median_slippage_ticks:+.2f}t '
+            f'(VWAP avg={d["vwap_sell_avg"]:+.2f}t).</p>'
+            + img(d["bt_b64"])
         )
 
     return f"""<!DOCTYPE html>
@@ -150,7 +330,7 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
 <body>
   <h2>Futures Execution Explorer</h2>
   <form method="get" action="/plot">
-    <select name="contract">{contract_opts}</select>
+    {source_select}
 
     <div class="ctrl-row">
       <label>τ = <strong id="tv">{tau}</strong> min</label>
@@ -192,6 +372,14 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
                       document.getElementById('kd_h').value=this.value;">
       <input type="hidden" id="kd_h" name="k_dx" value="{kd}">
 
+      <span class="sep">|</span>
+
+      <label>fill target = <strong id="ftv">{fp / 100:.2f}</strong></label>
+      <input type="range" min="{FILL_MIN_PCT}" max="{FILL_MAX_PCT}" step="{FILL_STEP_PCT}" value="{fp}"
+             oninput="document.getElementById('ftv').textContent=(this.value/100).toFixed(2);
+                      document.getElementById('ft_h').value=this.value;">
+      <input type="hidden" id="ft_h" name="fill" value="{fp}">
+
       <button type="submit">Plot</button>
     </div>
   </form>
@@ -199,11 +387,14 @@ def _html(contracts, selected_stem="", tau=5, half_life=HALF_LIFE_DEFAULT,
   {vol_section}
   {hist_section}
   {regime_section}
+  {epdf_section}
+  {backtest_section}
 </body>
 </html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
+    markets = _scan_markets()
     contracts = _scan_contracts()
 
     def log_message(self, fmt, *args):
@@ -221,11 +412,11 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         if parsed.path == "/":
-            self._send(_html(self.contracts))
+            self._send(_html(self.markets, self.contracts))
 
         elif parsed.path == "/plot":
             params    = parse_qs(parsed.query)
-            stem      = params.get("contract", [""])[0]
+            source    = params.get("source", [""])[0]
             tau_raw   = int(params.get("tau",        [5])[0])
             tau       = tau_raw if tau_raw in TAU_VALUES else TAU_VALUES[0]
             hl_raw    = int(params.get("half_life",  [HALF_LIFE_DEFAULT])[0])
@@ -236,15 +427,18 @@ class Handler(BaseHTTPRequestHandler):
             n_vol     = max(STATES_MIN, min(STATES_MAX, nv_raw))
             kd_raw    = int(params.get("k_dx",       [STATES_DEFAULT])[0])
             k_dx      = max(STATES_MIN, min(STATES_MAX, kd_raw))
+            fill_raw  = int(params.get("fill",       [FILL_DEFAULT_PCT])[0])
+            fill_pct  = max(FILL_MIN_PCT, min(FILL_MAX_PCT, fill_raw))
 
-            match = next((p for p in self.contracts if p.stem == stem), None)
-            if match is None:
-                self._send("<p>Contract not found.</p>", 404)
+            data = _render(source, tau, half_life, n_range, n_vol, k_dx,
+                           fill_rate_target=fill_pct / 100)
+            if data is None:
+                self._send("<p>Source not found or no usable data.</p>", 404)
                 return
-            data = _render(match, tau, half_life, n_range, n_vol, k_dx)
-            self._send(_html(self.contracts, selected_stem=stem, tau=tau,
-                             half_life=half_life, n_states_range=n_range,
-                             n_states_vol=n_vol, k_states_dx=k_dx, data=data))
+            self._send(_html(self.markets, self.contracts, selected_source=source,
+                             tau=tau, half_life=half_life, n_states_range=n_range,
+                             n_states_vol=n_vol, k_states_dx=k_dx, fill_pct=fill_pct,
+                             data=data))
 
         else:
             self._send("<p>Not found.</p>", 404)
