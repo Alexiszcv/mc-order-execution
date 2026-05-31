@@ -2,7 +2,10 @@
 
 Volatility/volume-based order management system for futures markets.
 Empirical PDFs of intrawindow price ranges, conditioned on market regime, are used
-to optimally place limit orders and minimize slippage.
+to optimally place limit orders and minimize slippage. It ships a no-lookahead
+backtester, a Monte Carlo execution layer, an **AI-agent execution-value** evaluation
+across all provided markets (see *Agentic value*), and an interactive Streamlit
+dashboard for parameter tuning.
 
 ---
 
@@ -203,8 +206,10 @@ bias is small in this configuration. Both variants show:
 - **Mean near zero** — dragged down by the chase-on-unfilled tail
 - **Fill rate 66–72%** — close to the 0.6 target
 
-The edge is real but modest. Tightening `fill_rate_target`, refining regime
-granularity, or adopting a smarter chase policy are the obvious levers.
+The edge is real but modest. The levers explored from here — a smarter chase
+policy (cost-aware ℓ\*, chase-at-mid, early-chase) and especially the **chase-cap**
+that truncates the unfilled tail — are developed and quantified in the *Agentic
+value* section below, where they turn the mean positive on the liquid markets.
 
 ### Known simplifications
 
