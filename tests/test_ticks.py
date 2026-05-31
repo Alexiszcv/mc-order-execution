@@ -9,14 +9,16 @@ from order_mgmt.ticks import infer_tick, lookup_tick, resolve_tick
 
 
 def test_lookup_known_markets() -> None:
+    # Values are in the provided CSVs' quoting units (see ticks.py docstring), so the
+    # scaled FX/energy/index markets use the data-scale tick, not the raw exchange tick.
     assert lookup_tick("GCM24") == 0.10
     assert lookup_tick("NQH20") == 0.25
     assert lookup_tick("ESH20") == 0.25
-    assert lookup_tick("BPM20") == 0.0001
-    assert lookup_tick("JYU24") == 0.000001
+    assert lookup_tick("BPM20") == 0.01  # GBP quoted ×100
+    assert lookup_tick("JYU24") == 0.005  # JPY quoted ×10000
     assert lookup_tick("RXM25") == 0.01
-    assert lookup_tick("VGH22") == 1.0
-    assert lookup_tick("HOF22") == 0.0001
+    assert lookup_tick("VGH22") == 0.5  # EuroStoxx prints on 0.5 grid
+    assert lookup_tick("HOF22") == 0.01  # heating oil in cents/gal
 
 
 def test_lookup_unknown_returns_none() -> None:

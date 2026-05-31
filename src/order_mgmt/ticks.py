@@ -4,21 +4,25 @@
 price gap) only for markets absent from `TICK_TABLE`.
 
 Sources: the assignment PDF (§3.2) fixes only ES = 0.25 and delegates the rest to each
-contract's exchange spec. The remaining values are from the listed exchange contract
-specs, cross-checked empirically against the provided 1-min data via `infer_tick`:
-- COMEX Gold (GC) = 0.10 USD/oz
-- CME E-mini equity index: ES (S&P) and NQ (Nasdaq-100) = 0.25
-- CME FX: BP (GBP/USD) = 0.0001 USD/GBP, JY (JPY/USD) = 0.000001 USD/JPY
-- Eurex Bund (RX) = 0.01 (price points), EuroStoxx 50 (VG) = 1.0 (index points)
-- NYMEX heating oil (HO) = 0.0001 USD/gal
+contract's exchange spec. `TICK_TABLE` holds the tick **in the provided CSVs' own quoting
+units** — because every downstream consumer (ranges, ePDFs, backtest, agent eval) needs
+ε in the data's units for ℓ = ΔPrice/ε to be a count of spreads. Each value is the exchange
+spec tick adjusted for the CSV's quoting scale, and cross-checked against the data via
+`infer_tick` (smallest observed price gap over the full history):
 
-Caveat — quoting scale: the table is in *raw exchange units*, but the provided CSVs quote
-some markets at a scaled representation, so the table value and the data granularity differ
-by a scale factor: GBP is quoted x100 (1.3704 -> 137.04, tick 0.0001 -> 0.01), JPY x10000,
-HO in cents, and VG shows 0.5 prints. For range/spread math (l = dPrice/eps) eps must be in
-the data's own units, so use `infer_tick` on the actual data; treat `TICK_TABLE` as a
-documentation/sanity reference, not an override. Wiring the raw table value into the spread
-counts would silently inflate l by the scale factor for GBP/JPY/HO/VG.
+| Contract | Exchange spec tick | CSV quoting scale | Data-unit tick |
+|----------|--------------------|-------------------|----------------|
+| GC (COMEX Gold)        | 0.10 USD/oz       | as-is        | 0.10  |
+| ES / NQ (CME E-mini)   | 0.25 index pts    | as-is        | 0.25  |
+| RX (Eurex Bund)        | 0.01 price pts    | as-is        | 0.01  |
+| BP (GBP/USD)           | 0.0001 USD/GBP    | ×100 (1.37→137)  | 0.01  |
+| JY (JPY/USD)           | 0.0000005 USD/JPY | ×10000           | 0.005 |
+| HO (NYMEX ULSD)        | 0.0001 USD/gal    | cents/gal (×100) | 0.01  |
+| VG (EuroStoxx 50)      | 1.0 index pt      | 0.5 prints in CSV| 0.5   |
+
+Earlier versions stored the *raw exchange* tick for the scaled markets (BP/JY/HO/VG), which
+silently inflated ℓ by the scale factor (e.g. GBP ℓ ×100). The values below are in data
+units so `resolve_tick` is safe to use directly for all markets.
 """
 
 from __future__ import annotations
@@ -27,15 +31,17 @@ from math import floor, log10
 
 import numpy as np
 
+# Values are in the provided CSVs' quoting units (see module docstring), verified via
+# infer_tick on the full price history of each market.
 TICK_TABLE: dict[str, float] = {
-    "GC": 0.10,
-    "NQ": 0.25,
-    "ES": 0.25,
-    "BP": 0.0001,
-    "JY": 0.000001,
-    "RX": 0.01,
-    "VG": 1.0,
-    "HO": 0.0001,
+    "GC": 0.10,    # COMEX Gold, as-is
+    "NQ": 0.25,    # CME E-mini Nasdaq-100, as-is
+    "ES": 0.25,    # CME E-mini S&P 500, as-is
+    "RX": 0.01,    # Eurex Bund, as-is
+    "BP": 0.01,    # GBP/USD: 0.0001 USD/GBP × ×100 CSV scale
+    "JY": 0.005,   # JPY/USD: 0.0000005 USD/JPY × ×10000 CSV scale
+    "HO": 0.01,    # NYMEX ULSD: 0.0001 USD/gal in cents/gal
+    "VG": 0.5,     # EuroStoxx 50: CSV prints on a 0.5 grid
 }
 
 
