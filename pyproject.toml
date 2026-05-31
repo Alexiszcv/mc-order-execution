@@ -8,6 +8,8 @@ dependencies = [
     "pandas>=2.2",
     "scipy>=1.13",
     "matplotlib>=3.8",
+    "streamlit>=1.40",
+    "plotly>=5.24",
 ]
 
 [project.optional-dependencies]
@@ -39,4 +41,7 @@ select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "RUF"]
 ignore = ["E501"]  # line-length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["N802"]  # allow non-snake_case for test names where useful
+# Spec-mandated regime names (M, N, K, R_U, R_D) intentionally violate snake_case.
+"tests/**" = ["N802", "N803", "N806"]
+"src/viz_plotly.py" = ["N803", "N806", "N816"]
+"src/streamlit_app.py" = ["N803", "N806", "N816"]
